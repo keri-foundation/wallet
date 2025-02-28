@@ -7,7 +7,8 @@ import datetime
 import logging
 
 import flet as ft
-from flet_core import padding
+from flet.core import padding
+from flet.core.icons import Icons
 from keri.app import connecting
 from keri.app.habbing import GroupHab
 from keri.peer import exchanging
@@ -30,14 +31,14 @@ class ViewContactPanel(ContactBase):
         self.cancelled = False
         self.selected_identifier = None
         self.unverified = ft.Icon(
-            ft.icons.SHIELD_OUTLINED, size=32, color=Colouring.get(Colouring.RED), tooltip='Unverified', visible=True
+            Icons.SHIELD_OUTLINED, size=32, color=Colouring.get(Colouring.RED), tooltip='Unverified', visible=True
         )
-        self.verified = ft.Icon(ft.icons.SHIELD_ROUNDED, size=32, tooltip='Verified', visible=True)
+        self.verified = ft.Icon(ft.Icons.SHIELD_ROUNDED, size=32, tooltip='Verified', visible=True)
 
         self.phrase = ft.TextField(read_only=True, width=800)
         self.pacifier = ft.Text(italic=True, size=14, weight=ft.FontWeight.W_200)
 
-        self.copy_phrase = ft.IconButton(icon=ft.icons.COPY_ROUNDED, on_click=self.copy_challenge, visible=False)
+        self.copy_phrase = ft.IconButton(icon=ft.Icons.COPY_ROUNDED, on_click=self.copy_challenge, visible=False)
 
         self.alias = self.contact['alias']
         self.verify_challenge_text = ft.TextField(width=800, on_change=self.verify_enable)
@@ -58,7 +59,7 @@ class ViewContactPanel(ContactBase):
                         padding=ft.padding.only(10, 0, 10, 0),
                     ),
                     ft.Container(
-                        ft.IconButton(icon=ft.icons.CLOSE, on_click=self.close),
+                        ft.IconButton(icon=ft.Icons.CLOSE, on_click=self.close),
                         alignment=ft.alignment.top_right,
                         expand=True,
                         padding=ft.padding.only(0, 0, 10, 0),
@@ -100,7 +101,7 @@ class ViewContactPanel(ContactBase):
         )
 
         self.verify_button = ft.IconButton(
-            icon=ft.icons.CHECK,
+            icon=ft.Icons.CHECK,
             on_click=self.verify_challenge,
             disabled=True,
         )
@@ -114,7 +115,7 @@ class ViewContactPanel(ContactBase):
                                 ft.Row(
                                     [
                                         ft.Text(f'Generate challenge to send to {self.alias}', size=14),
-                                        ft.IconButton(icon=ft.icons.LOOP, on_click=self.generate_challenge),
+                                        ft.IconButton(icon=ft.Icons.LOOP, on_click=self.generate_challenge),
                                     ]
                                 ),
                                 ft.Row([self.phrase, self.copy_phrase]),
@@ -188,7 +189,7 @@ class ViewContactPanel(ContactBase):
                                             alignment=ft.alignment.top_right,
                                         ),
                                         ft.IconButton(
-                                            icon=ft.icons.COPY_ROUNDED,
+                                            icon=ft.Icons.COPY_ROUNDED,
                                             data=self.contact['oobi'],
                                             on_click=self.copy_oobi,
                                             padding=padding.only(right=10),
@@ -212,7 +213,7 @@ class ViewContactPanel(ContactBase):
                                                 ft.Text('Refresh Key State:', width=175, weight=ft.FontWeight.BOLD),
                                                 ft.IconButton(
                                                     tooltip='Refresh key state',
-                                                    icon=ft.icons.REFRESH_ROUNDED,
+                                                    icon=ft.Icons.REFRESH_ROUNDED,
                                                     on_click=self.refresh_keystate,
                                                     padding=padding.only(right=10),
                                                 ),
@@ -248,14 +249,11 @@ class ViewContactPanel(ContactBase):
     async def close(self, e):
         self.cancelled = True
         self.app.page.route = '/contacts'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def copy_oobi(self, e):
-        await self.app.page.set_clipboard_async(e.control.data)
-        self.page.snack_bar = ft.SnackBar(ft.Text('OOBI URL Copied!'), duration=2000)
-
-        self.page.snack_bar.open = True
-        await self.page.update_async()
+        self.app.page.set_clipboard(e.control.data)
+        self.app.snack('OOBI URL Copied!', duration=2000)
 
     def is_verfied(self):
         accepted = [saider.qb64 for saider in self.app.hby.db.chas.get(keys=(self.contact['id'],))]
@@ -270,24 +268,23 @@ class ViewContactPanel(ContactBase):
         self.selected_identifier = e.control.value
         self.verify_panel.visible = len(self.selected_identifier) > 0
         await self.generate_challenge(None)
-        await self.update_async()
+        self.update()
 
     async def show_verify(self):
         return self.selected_identifier is not None
 
     async def copy_challenge(self, e):
         sig = self.contact['id']
-        await self.app.page.set_clipboard_async(e.control.data)
-
-        await self.app.snack('Phrase Copied!')
+        self.app.page.set_clipboard(e.control.data)
+        self.app.snack('Phrase Copied!')
         await asyncio.sleep(1.0)
-        await self.app.snack('Waiting for challenge response')
+        self.app.snack('Waiting for challenge response')
 
         found = False
         i = 0
         while not found and not self.cancelled:
             self.pacifier.value = f'Waiting for challenge response{"." * i}'
-            await self.app.page.update_async()
+            self.app.page.update()
 
             saiders = self.app.hby.db.reps.get(keys=(sig,))
             for saider in saiders:
@@ -310,18 +307,18 @@ class ViewContactPanel(ContactBase):
             self.pacifier.value = ''
             self.unverified.visible = False
             self.verified.visible = True
-            await self.update_async()
+            self.update()
 
-            await self.app.snack('Challenge successful.')
-            await self.app.page.update_async()
+            self.app.snack('Challenge successful.')
+            self.app.page.update()
 
     async def verify_enable(self, e):
         got_mnemonic = len(self.verify_challenge_text.value.split(' ')) == 12
 
         self.verify_button.disabled = False if got_mnemonic else True
         if got_mnemonic:
-            self.verify_button.icon_color = ft.colors.GREY_400
-        await self.update_async()
+            self.verify_button.icon_color = ft.Colors.GREY_400
+        self.update()
 
     async def generate_challenge(self, e):
         del e
@@ -329,14 +326,14 @@ class ViewContactPanel(ContactBase):
         self.phrase.value = mnem.generate(strength=128)
         self.copy_phrase.data = self.phrase.value
         self.copy_phrase.visible = True
-        await self.update_async()
+        self.update()
 
     async def verify_challenge(self, e):
         hab = self.app.hby.habs[self.selected_identifier]
 
         if self.identifiers.value is None:
-            await self.app.snack('Select an identifier to verify with')
-            await self.app.page.update_async()
+            self.app.snack('Select an identifier to verify with')
+            self.app.page.update()
             return
 
         payload = dict(i=self.selected_identifier, words=self.verify_challenge_text.value.split(' '))
@@ -353,8 +350,8 @@ class ViewContactPanel(ContactBase):
             await asyncio.sleep(1.0)
 
         self.verify_challenge_text.value = ''
-        await self.app.page.update_async()
-        await self.app.snack('Challenge response sent!')
+        self.app.page.update()
+        self.app.snack('Challenge response sent!')
 
     @log_errors
     async def refresh_keystate(self, e):
@@ -370,4 +367,4 @@ class ViewContactPanel(ContactBase):
         sn, dt = self.get_sn_date()
         self.sn_text.value = sn
         self.dt_text.value = dt.strftime('%Y-%m-%d %I:%M %p')
-        await self.update_async()
+        self.update()

@@ -48,41 +48,39 @@ class Layout(ft.Row):
         self._active_view = view if view else self.splash
         self.controls[-1] = self._active_view
 
-    async def set_witness_view(self, aid):
+    def set_witness_view(self, aid):
         org = connecting.Organizer(hby=self.app.hby)
         witness = org.get(aid)
         self.active_view = ViewWitness(app=self.app, witness=witness)
         self.page.floating_action_button = None
-        await self.update_async()
+        self.update()
 
-    async def set_witnesses_view(self):
+    def set_witnesses_view(self):
         self.active_view = Witnesses(app=self.app)
-        self.page.floating_action_button = ft.FloatingActionButton(icon=ft.icons.ADD, on_click=self.witnesses.add_witness)
-        await self.update_async()
+        self.page.floating_action_button = ft.FloatingActionButton(icon=ft.Icons.ADD, on_click=self.witnesses.add_witness)
+        self.update()
 
-    async def set_witness_add_view(self):
+    def set_witness_add_view(self):
         self.active_view = AddWitness(app=self.app)
         self.page.floating_action_button = None
-        await self.update_async()
+        self.update()
 
-    async def set_identifiers_list(self):
+    def set_identifiers_list(self):
         self.active_view = self.identifiers
-        self.page.floating_action_button = ft.FloatingActionButton(icon=ft.icons.ADD, on_click=self.identifiers.add_identifier)
+        self.page.floating_action_button = ft.FloatingActionButton(icon=ft.Icons.ADD, on_click=self.identifiers.add_identifier)
         self.navbar.rail.selected_index = Navbar.IDENTIFIERS
+        self.navbar.update()
+        self.update()
 
-        await self.navbar.update_async()
-        await self.update_async()
-
-    async def set_identifier_view(self, prefix):
+    def set_identifier_view(self, prefix):
         hab = self.app.hby.habs[prefix]
         self.active_view = ViewIdentifierPanel(self.app, hab)
         self.page.floating_action_button = None
         self.navbar.rail.selected_index = Navbar.IDENTIFIERS
+        self.navbar.update()
+        self.update()
 
-        await self.navbar.update_async()
-        await self.update_async()
-
-    async def set_identifier_rotate(self, prefix):
+    def set_identifier_rotate(self, prefix):
         hab = self.app.hby.habs[prefix]
         if isinstance(hab, habbing.GroupHab):
             self.active_view = RotateGroupIdentifierPanel(self.app, hab)
@@ -91,69 +89,60 @@ class Layout(ft.Row):
 
         self.page.floating_action_button = None
         self.navbar.rail.selected_index = Navbar.IDENTIFIERS
+        self.navbar.update()
+        self.update()
 
-        await self.navbar.update_async()
-        await self.update_async()
-
-    async def set_identifier_create(self):
+    def set_identifier_create(self):
         self.active_view = CreateIdentifierPanel(self.app)
         self.navbar.rail.selected_index = Navbar.IDENTIFIERS
+        self.navbar.update()
+        self.update()
 
-        await self.navbar.update_async()
-        await self.update_async()
-
-    async def set_contact_create(self):
+    def set_contact_create(self):
         self.active_view = CreateContactPanel(self.app)
         self.navbar.rail.selected_index = Navbar.CONTACTS
+        self.navbar.update()
+        self.update()
 
-        await self.navbar.update_async()
-        await self.update_async()
-
-    async def set_contacts_list(self):
+    def set_contacts_list(self):
         self.active_view = self.contacts
         self.page.floating_action_button = ft.FloatingActionButton(
-            icon=ft.icons.ADD,
+            icon=ft.Icons.ADD,
             on_click=self.contacts.add_contact,
         )
         self.navbar.rail.selected_index = Navbar.CONTACTS
+        self.navbar.update()
+        self.page.update()
 
-        await self.navbar.update_async()
-        await self.page.update_async()
-
-    async def set_contact_view(self, aid):
+    def set_contact_view(self, aid):
         org = connecting.Organizer(hby=self.app.hby)
         contact = org.get(aid)
         self.active_view = ViewContactPanel(app=self.app, contact=contact)
         self.navbar.rail.selected_index = Navbar.CONTACTS
+        self.navbar.update()
+        self.page.update()
 
-        await self.navbar.update_async()
-        await self.page.update_async()
-
-    async def set_settings_view(self):
+    def set_settings_view(self):
         self.active_view = self.settings
         self.navbar.rail.selected_index = Navbar.SETTINGS
+        self.navbar.update()
+        self.page.update()
 
-        await self.navbar.update_async()
-        await self.page.update_async()
-
-    async def set_notifications_view(self):
+    def set_notifications_view(self):
         self.active_view = Notifications(self.app)
         self.navbar.rail.selected_index = None
+        self.navbar.update()
+        self.page.update()
 
-        await self.navbar.update_async()
-        await self.page.update_async()
-
-    async def set_notifications_note_view(self, note_id):
+    def set_notifications_note_view(self, note_id):
         self.active_view = self.notifications.note_view(note_id)
         self.navbar.rail.selected_index = None
+        self.navbar.update()
+        self.page.update()
 
-        await self.navbar.update_async()
-        await self.page.update_async()
-
-    async def set_splash_view(self):
+    def set_splash_view(self):
         self.splash.visible = True
         self.active_view = self.splash
         self.navbar.rail.selected_index = None
-
-        await self.navbar.update_async()
-        await self.page.update_async()
+        self.navbar.update()
+        self.page.update()

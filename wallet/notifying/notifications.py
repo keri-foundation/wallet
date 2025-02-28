@@ -15,12 +15,12 @@ class Notifications(NotificationsBase):
     Represents a notifications component in the application.
 
     Args:
-        app: The application instance.
+        app(apping.CitadelApp): The application instance.
 
     Attributes:
-        list: A column control that holds the list of notifications.
-        app: The application instance.
-        notes: A list to store the notifications.
+        list(ft.Column): A column control that holds the list of notifications.
+        app(apping.CitadelApp): The application instance.
+        notes(list): A list to store the notifications.
 
     Methods:
         route_note: Routes to a specific notification.
@@ -52,7 +52,7 @@ class Notifications(NotificationsBase):
         self.app.agent.noter.update()
 
         self.app.page.route = f'/notifications/{note.rid}'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def delete_note(self, e):
         """
@@ -65,8 +65,7 @@ class Notifications(NotificationsBase):
             None
         """
         self.app.agent.notifier.rem(rid=e.control.data.rid)
-        self.build()
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def dismiss(self, _):
         """
@@ -79,9 +78,9 @@ class Notifications(NotificationsBase):
             None
         """
         self.app.page.route = '/notifications'
-        await self.app.page.update_async()
+        self.app.page.update()
 
-    def build(self):
+    def did_mount(self):
         """
         Builds the notifications and returns the user interface elements.
 
@@ -97,12 +96,14 @@ class Notifications(NotificationsBase):
         self.notes = self.app.agent.notifier.getNotes(start=0, end=self.app.agent.notifier.getNoteCnt())
 
         if len(self.notes) == 0:
-            return ft.Column(
-                [
-                    self.title,
-                    ft.Row([ft.Text('Such empty...')]),
-                ]
-            )
+            self.controls = [
+                ft.Column(
+                    [
+                        self.title,
+                        ft.Row([ft.Text('Such empty...')]),
+                    ]
+                )
+            ]
 
         self.notes.sort(key=lambda note: datetime.fromisoformat(note.datetime), reverse=True)
 
@@ -115,21 +116,21 @@ class Notifications(NotificationsBase):
             match route:
                 case '/multisig/icp':
                     tile = ft.ListTile(
-                        leading=ft.Icon(ft.icons.PEOPLE_ROUNDED),
+                        leading=ft.Icon(ft.Icons.PEOPLE_ROUNDED),
                         title=ft.Text('Group Inception Request'),
                         subtitle=ft.Text(f'{dt_fmt}'),
                         trailing=ft.PopupMenuButton(
                             tooltip=None,
-                            icon=ft.icons.MORE_VERT,
+                            icon=ft.Icons.MORE_VERT,
                             items=[
                                 ft.PopupMenuItem(
                                     text='View',
-                                    icon=ft.icons.PAGEVIEW,
+                                    icon=ft.Icons.PAGEVIEW,
                                     data=note,
                                     on_click=self.route_note,
                                 ),
                                 ft.PopupMenuItem(
-                                    text='Delete', icon=ft.icons.DELETE_FOREVER, on_click=self.delete_note, data=note
+                                    text='Delete', icon=ft.Icons.DELETE_FOREVER, on_click=self.delete_note, data=note
                                 ),
                             ],
                         ),
@@ -140,21 +141,21 @@ class Notifications(NotificationsBase):
                     self.list.controls.append(tile)
                 case '/multisig/rot':
                     tile = ft.ListTile(
-                        leading=ft.Icon(ft.icons.PEOPLE_ROUNDED),
+                        leading=ft.Icon(ft.Icons.PEOPLE_ROUNDED),
                         title=ft.Text('Group Rotation Request'),
                         subtitle=ft.Text(f'{dt_fmt}'),
                         trailing=ft.PopupMenuButton(
                             tooltip=None,
-                            icon=ft.icons.MORE_VERT,
+                            icon=ft.Icons.MORE_VERT,
                             items=[
                                 ft.PopupMenuItem(
                                     text='View',
-                                    icon=ft.icons.PAGEVIEW,
+                                    icon=ft.Icons.PAGEVIEW,
                                     data=note,
                                     on_click=self.route_note,
                                 ),
                                 ft.PopupMenuItem(
-                                    text='Delete', icon=ft.icons.DELETE_FOREVER, on_click=self.delete_note, data=note
+                                    text='Delete', icon=ft.Icons.DELETE_FOREVER, on_click=self.delete_note, data=note
                                 ),
                             ],
                         ),
@@ -165,12 +166,14 @@ class Notifications(NotificationsBase):
                     self.list.controls.append(tile)
             self.list.controls.append(ft.Divider(opacity=0.1))
 
-        return ft.Column(
-            [
-                self.title,
-                ft.Row([self.card]),
-            ]
-        )
+        self.controls = [
+            ft.Column(
+                [
+                    self.title,
+                    ft.Row([self.card]),
+                ]
+            )
+        ]
 
     def note_view(self, note_id):
         """

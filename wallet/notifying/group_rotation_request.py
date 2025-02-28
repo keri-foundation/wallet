@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List
 
 import flet as ft
-from flet_core import FontWeight
+from flet.core.types import FontWeight
 from keri.app import connecting, grouping
 from keri.core import coring, serdering
 from ordered_set import OrderedSet as oset
@@ -106,7 +106,7 @@ class NoticeMultisigGroupRotation(NotificationsBase):
                         padding=ft.padding.only(10, 0, 10, 0),
                     ),
                     ft.Container(
-                        ft.IconButton(icon=ft.icons.CLOSE, on_click=self.cancel),
+                        ft.IconButton(icon=ft.Icons.CLOSE, on_click=self.cancel),
                         alignment=ft.alignment.top_right,
                         expand=True,
                         padding=ft.padding.only(0, 0, 10, 0),
@@ -122,7 +122,7 @@ class NoticeMultisigGroupRotation(NotificationsBase):
 
     async def cancel(self, e):
         self.app.page.route = '/notifications'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     def participant_row(self, alias: str, pre: str, sthold, rthold) -> ft.DataRow:
         """Renders a single participant as a DataRow"""
@@ -150,7 +150,7 @@ class NoticeMultisigGroupRotation(NotificationsBase):
                         ft.Text('Refresh Key State:', width=175, weight=ft.FontWeight.BOLD),
                         ft.IconButton(
                             tooltip='Refresh key state',
-                            icon=ft.icons.REFRESH_ROUNDED,
+                            icon=ft.Icons.REFRESH_ROUNDED,
                             on_click=self.refresh_keystate,
                             padding=ft.padding.only(right=10),
                         ),
@@ -227,7 +227,7 @@ class NoticeMultisigGroupRotation(NotificationsBase):
             alias = contact['alias'] if 'alias' in contact else None
             logger.info(f'Querying key state for {contact["alias"]} with pre: {pre}')
             await OOBIResolverService(self.app).resolve_oobi(pre=contact['id'], oobi=contact['oobi'], alias=alias, force=True)
-            await self.app.snack(f"Resolved {contact['alias']}'s key state for AID {pre}")
+            self.app.snack(f"Resolved {contact['alias']}'s key state for AID {pre}")
 
     @staticmethod
     async def get_contacts(agent):
@@ -314,12 +314,12 @@ class NoticeMultisigGroupRotation(NotificationsBase):
 
     async def show_progress_ring(self):
         self.join_progress_ring.visible = True
-        await self.page.update_async()
+        self.page.update()
 
     async def hide_progress_ring(self):
         self.join_progress_ring.visible = False
-        if self.page and self.page.update_async:  # may have navigated away so self.page may be None
-            await self.page.update_async()
+        if self.page and self.page.update:  # may have navigated away so self.page may be None
+            self.page.update()
 
     @log_errors
     async def join(self, e):
@@ -328,8 +328,8 @@ class NoticeMultisigGroupRotation(NotificationsBase):
         """
         if self.group_alias.value == '':
             self.group_alias.border_color = Colouring.get(Colouring.RED)
-            await self.app.snack('Enter an alias for the group')
-            await self.update_async()
+            self.app.snack('Enter an alias for the group')
+            self.update()
             return
 
         rid = e.control.data
@@ -351,9 +351,7 @@ class NoticeMultisigGroupRotation(NotificationsBase):
         if mhab is None:
             message = "Invalid multisig group inception request, aid list must contain a local identifier'"
             logger.error(message)
-            self.page.snack_bar = ft.SnackBar(ft.Text(message), duration=5000)
-            self.page.snack_bar.open = True
-            self.page.update()
+            self.app.snack(message, duration=5000)
             return False
 
         pre = orot.ked['i']
@@ -411,12 +409,12 @@ class NoticeMultisigGroupRotation(NotificationsBase):
         await self.hide_progress_ring()
 
         logger.info(f'Group {group} rotation {serder.sn} joined')
-        await self.app.snack(f'Group rotation for {group} complete at event {serder.sn}.')
+        self.app.snack(f'Group rotation for {group} complete at event {serder.sn}.')
         self.app.page.route = f'/identifiers/{serder.pre}/view'
 
     async def dismiss(self, e):
         self.app.page.route = '/notifications'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     def panel(self):
         """The content returned for this notification control"""

@@ -5,7 +5,7 @@ rotate_identifier.py
 import logging
 
 import flet as ft
-from flet_core import FontWeight
+from flet.core.types import FontWeight
 from keri.app import connecting
 
 from wallet.app.identifying.identifier import IdentifierBase
@@ -47,7 +47,7 @@ class RotateIdentifierPanel(IdentifierBase):
             controls=[
                 self.witnessDropdown,
                 ft.IconButton(
-                    icon=ft.icons.ADD,
+                    icon=ft.Icons.ADD,
                     tooltip='Add Witness',
                     on_click=self.addWitness,
                 ),
@@ -64,7 +64,7 @@ class RotateIdentifierPanel(IdentifierBase):
                         padding=ft.padding.only(10, 0, 10, 0),
                     ),
                     ft.Container(
-                        ft.IconButton(icon=ft.icons.CLOSE, on_click=self.cancel),
+                        ft.IconButton(icon=ft.Icons.CLOSE, on_click=self.cancel),
                         alignment=ft.alignment.top_right,
                         expand=True,
                         padding=ft.padding.only(0, 0, 10, 0),
@@ -95,22 +95,22 @@ class RotateIdentifierPanel(IdentifierBase):
 
         if self.hab.delpre:
             self.app.agent.anchors.push(dict(sn=self.hab.kever.sner.num))
-            await self.app.snack(f'Rotating {self.hab.pre}, waiting for delegation approval...')
+            self.app.snack(f'Rotating {self.hab.pre}, waiting for delegation approval...')
 
         elif len(self.hab.kever.wits) > 0:
             self.app.agent.witners.push(dict(serder=self.hab.kever.serder))
-            await self.app.snack(f'Rotating {self.hab.pre}, waiting for witness receipts...')
+            self.app.snack(f'Rotating {self.hab.pre}, waiting for witness receipts...')
 
         self.app.page.route = f'/identifiers/{self.hab.pre}/view'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def cancel(self, _):
         self.app.page.route = '/identifiers'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def back_to_identifier(self, e):
         self.app.page.route = f'/identifiers/{self.hab.pre}/view'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     def witnessTile(self, wit_ct, on_delete):
         """
@@ -124,7 +124,7 @@ class RotateIdentifierPanel(IdentifierBase):
         return ft.ListTile(
             title=title,
             trailing=ft.IconButton(
-                ft.icons.DELETE_OUTLINED,
+                ft.Icons.DELETE_OUTLINED,
                 on_click=on_delete,
                 data=wit_ct['id'],
             ),
@@ -164,28 +164,28 @@ class RotateIdentifierPanel(IdentifierBase):
             self.witnessList.controls.remove(tile)
 
         self.toad.value = str(self.recommendedThold(len(self.witnessList.controls)))
-        await self.toad.update_async()
-        await self.witnessList.update_async()
+        self.toad.update()
+        self.witnessList.update()
 
     async def addWitness(self, _):
         if not self.witnessDropdown.value:
-            await self.app.snack('Please select a witness')
+            self.app.snack('Please select a witness')
             return
         witness = self.witnessDropdown.value
         self.witnessDropdown.value = None
 
         if self.findSelectedWitness(witness) is not None:
-            await self.app.snack(f'You can not add {witness} more than once')
+            self.app.snack(f'You can not add {witness} more than once')
             return
 
         witness = self.org.get(witness)
         self.witnessList.controls.append(self.witnessTile(witness, self.deleteWitness))
 
         self.toad.value = str(self.recommendedThold(len(self.witnessList.controls)))
-        await self.toad.update_async()
+        self.toad.update()
 
-        await self.witnessDropdown.update_async()
-        await self.witnessList.update_async()
+        self.witnessDropdown.update()
+        self.witnessList.update()
 
     def panel(self):
         kever = self.hab.kever

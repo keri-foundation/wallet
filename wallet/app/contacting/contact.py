@@ -42,5 +42,7 @@ def filter_witnesses(contacts: List[dict]) -> List[dict]:
     controllers = []
     for contact in contacts:
         if 'tag=witness' not in contact['oobi']:
+            if 'type' in contact and 'witness' in contact['type']:
+                continue
             controllers.append(contact)
     return controllers

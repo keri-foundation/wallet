@@ -57,12 +57,12 @@ class KELUpdateConfirmDialog(ft.AlertDialog):
             now = helping.nowUTC()
             if now > start_time + timeout_delta:
                 logger.info('KEL update timed out')
-                await self.app.snack('Update request timed out', duration=3000)
+                self.app.snack('Update request timed out', duration=3000)
                 await self.close_confirm(None)
             for event in self.app.agent_events:
                 if event['event_type'] == event_type:
                     self.app.agent_events.remove(event)
-                    await self.app.snack('Update Log complete', duration=3000)
+                    self.app.snack('Update Log complete', duration=3000)
                     logger.info('KEL update complete')
                     await self.close_confirm(None)
             await asyncio.sleep(0.5)
@@ -74,7 +74,7 @@ class KELUpdateConfirmDialog(ft.AlertDialog):
         self.hab = hab
         self.aid_update = aid_update
         self.open = True
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def update_identifier_page(self):
         if self.app.layout.active_view == self.app.layout.identifiers:
@@ -82,7 +82,7 @@ class KELUpdateConfirmDialog(ft.AlertDialog):
             await identifiers.refresh_identifiers()
             await self.app.page.dialog.close_confirm()
             self.app.page.dialog = None
-            await self.app.page.update_async()
+            self.app.page.update()
 
     async def close_confirm(self, _):
         """
@@ -91,7 +91,7 @@ class KELUpdateConfirmDialog(ft.AlertDialog):
         self.open = False
         self.close_task.cancel()
         self.app.page.run_task(self.update_identifier_page)
-        await self.page.update_async()
+        self.page.update()
 
     async def show_error(self, message):
         """
@@ -99,8 +99,8 @@ class KELUpdateConfirmDialog(ft.AlertDialog):
         """
         self.error_text.value = message
         self.error_text.visible = True
-        await self.page.update_async()
-        await self.app.snack(message, duration=3000)
+        self.page.update()
+        self.app.snack(message, duration=3000)
 
     async def hide_error(self):
         """
@@ -108,17 +108,17 @@ class KELUpdateConfirmDialog(ft.AlertDialog):
         """
         self.error_text.value = ''
         self.error_text.visible = False
-        await self.page.update_async()
+        self.page.update()
 
     async def confirm_update(self, e):
         """
         Updates a local AID, usually multisig, from the specified witness
         Parameters:
-            e (flet.Control): The button control triggering this update
+            e (flet.ControlEvent): The button control triggering this update
         """
         await self.hide_error()
         self.update_progress_ring.visible = True
-        await self.page.update_async()
+        self.page.update()
 
         # new_digest = self.hab.kever.serder.ked['d']
         new_digest = self.aid_update.said
@@ -139,7 +139,7 @@ class KELUpdateConfirmDialog(ft.AlertDialog):
         update_message = (
             f'Updating identifier {self.hab.name} | {self.aid_update.aid} to event {new_sn} with digest {new_digest}'
         )
-        await self.app.snack(update_message, duration=3000)
+        self.app.snack(update_message, duration=3000)
         logger.info(update_message)
         self.app.agent.update_reqs.push(self.aid_update)
         self.update_progress_ring.visible = True
@@ -168,7 +168,7 @@ class KELUpdateConfirmPanel(IdentifierBase):
                         padding=ft.padding.only(10, 20, 10, 0),
                     ),
                     ft.Container(
-                        ft.IconButton(icon=ft.icons.CLOSE, on_click=self.cancel),
+                        ft.IconButton(icon=ft.Icons.CLOSE, on_click=self.cancel),
                         alignment=ft.alignment.top_right,
                         expand=True,
                         padding=ft.padding.only(0, 0, 10, 0),
@@ -217,13 +217,13 @@ class KELUpdateConfirmPanel(IdentifierBase):
 
     async def cancel(self, e):
         self.app.page.route = '/identifiers'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def confirm_update(self, e):
         """
         Updates a local AID, usually multisig, from the specified witness
         Parameters:
-            e (flet.Control): The button control triggering this update
+            e (flet.ControlEvent): The button control triggering this update
         """
         logger.info(f'Updating AID {self.hab.name} {self.aid_update.aid}')
         self.app.agent.update_reqs.push(self.aid_update)

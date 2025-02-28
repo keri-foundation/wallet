@@ -5,6 +5,8 @@ import pprint
 from pathlib import Path
 
 import flet as ft
+from flet.core.icons import Icons
+from flet.core.page import Page
 from hio.help import decking
 from keri.app import connecting
 from keri.app.keeping import Algos
@@ -22,22 +24,21 @@ logger = logging.getLogger('wallet')
 
 
 class WalletApp(ft.Stack):
+    """
+    Main wallet application control. Expressed as a Stack control
+
+    Attributes:
+        agent: Agent
+        page: ft.Page
+    """
+
     def __init__(self, page: ft.Page, config: WalletConfig):
         super().__init__()
         # Flet config props
         self.environment = config.environment
-        self.layout = None
-        self.page = page
+        self.config = config
+        self.layout = None  # filled in by did_mount
         self.name = config.app_name
-        self.page.title = (
-            self.name if config.environment.value == 'production' else f'{self.name} [{config.environment.value}]'
-        )
-        self.page.vertical_alignment = ft.MainAxisAlignment.CENTER
-        self.page.on_route_change = self.route_change
-        self.page.window.width = 1024
-        self.page.window.height = 768
-        self.page.window.prevent_close = True
-        self.page.window.on_event = self.on_window_event
 
         # ft.Stack attributes
         self.width = 1024
@@ -49,6 +50,7 @@ class WalletApp(ft.Stack):
         self.agent = None  # Will be set by the AgentDrawer
         self.agent_task = None  # Will be set by the AgentDrawer
         self.agent_shutdown_event = asyncio.Event()  # Will be set by the AgentDrawer
+        self.wit_pools = self.load_witness_pools(config)
 
         # AgentEvents
         self.agent_events = decking.Deck()
@@ -59,36 +61,17 @@ class WalletApp(ft.Stack):
         self.algo = Algos.salty
         self.salt = coring.randomNonce()[2:23]
 
-        # Flet Page state or components
+        # Flet Page state
         self.notes = []
         self.witnesses = []
         self.members = []
 
-        self.agentDrawer = drawing.AgentDrawer(app=self, page=page, open=True, config=config)
-        self.agentDrawerButton = ft.IconButton(
-            ft.icons.WALLET_ROUNDED,
-            tooltip='Wallets',
-            on_click=self.toggle_drawer,
-        )
-        self.notificationsButton = ft.IconButton(
-            ft.icons.NOTIFICATIONS_NONE_ROUNDED,
-            on_click=self.show_notifications,
-        )
-        self.lockButton = ft.IconButton(ft.icons.LOCK, on_click=self.lock)
-
-        self.actions = [self.agentDrawerButton]
-        self.page.appbar = ft.AppBar(
-            leading=ft.Container(
-                Assets().logo_icon,
-                border_radius=ft.border_radius.all(5),
-                padding=ft.padding.all(2),
-                margin=ft.margin.all(10),
-            ),
-            title=ft.Text(self.name, weight=ft.FontWeight.BOLD),
-            center_title=False,
-            actions=self.actions,
-        )
-        self.wit_pools = self.load_witness_pools(config)
+        # Flet components that will be filled in did_mount
+        self.agentDrawer = None
+        self.agentDrawerButton = None
+        self.notificationsButton = None
+        self.lockButton = None
+        self.actions = []
 
     @staticmethod
     def load_witness_pools(config: WalletConfig):
@@ -112,56 +95,106 @@ class WalletApp(ft.Stack):
             await self.close()
 
     def did_mount(self):
+        """
+        Lifecycle function called after component is mounted to page.
+        Flet populates the self.page attribute prior to calling the did_mount lifecycle function.
+        """
         logger.info('Wallet App mounted')
+        page: Page = self.page  # This is the page that Flet created for us
+        page.title = self.name if self.environment.value == 'production' else f'{self.name} [{self.environment.value}]'
+        page.vertical_alignment = ft.MainAxisAlignment.CENTER
+        page.on_route_change = self.route_change
+        page.window.width = 1024
+        page.window.height = 768
+        page.window.prevent_close = True
+        page.window.on_event = self.on_window_event
+
+        self.agentDrawer = drawing.AgentDrawer(app=self, page=page, open=True, config=self.config)
+        self.agentDrawerButton = ft.IconButton(
+            Icons.WALLET_ROUNDED,
+            tooltip='Wallets',
+            on_click=self.toggle_drawer,
+        )
+        self.notificationsButton = ft.IconButton(
+            Icons.NOTIFICATIONS_NONE_ROUNDED,
+            on_click=self.show_notifications,
+        )
+        self.lockButton = ft.IconButton(ft.Icons.LOCK, on_click=self.lock)
+
+        self.actions = [self.agentDrawerButton]
+        page.appbar = ft.AppBar(
+            leading=ft.Container(
+                Assets().logo_icon,
+                border_radius=ft.border_radius.all(5),
+                padding=ft.padding.all(2),
+                margin=ft.margin.all(10),
+            ),
+            title=ft.Text(self.name, weight=ft.FontWeight.BOLD),
+            center_title=False,
+            actions=self.actions,
+        )
+
+        self.layout = Layout(
+            self,
+            page,
+            expand=True,
+            vertical_alignment='start',
+        )
+        self.controls = [self.layout]
 
     @log_errors
     async def toggle_drawer(self, _):
+        await asyncio.sleep(0.1)
         self.page.end_drawer = self.agentDrawer
-        await self.page.show_end_drawer_async(self.page.end_drawer)
-        await self.page.end_drawer.update_async()
+        drawer = self.page.end_drawer
+        if drawer.open:
+            self.page.close(drawer)
+        else:
+            self.page.open(drawer)
+        self.page.end_drawer.update()
 
     @log_errors
     async def route_change(self, _):
         tr = ft.TemplateRoute(self.page.route)
         if tr.match('/'):
-            await self.page.go_async('/splash')
+            self.page.go('/splash')
         elif tr.match('/identifiers'):
-            await self.layout.set_identifiers_list()
+            self.layout.set_identifiers_list()
         elif tr.match('/identifiers/create'):
-            await self.layout.set_identifier_create()
+            self.layout.set_identifier_create()
         elif tr.match('/identifiers/:prefix/view'):
-            await self.layout.set_identifier_view(tr.prefix)
+            self.layout.set_identifier_view(tr.prefix)
         elif tr.match('/identifiers/:prefix/rotate'):
-            await self.layout.set_identifier_rotate(tr.prefix)
+            self.layout.set_identifier_rotate(tr.prefix)
         elif tr.match('/contacts'):
-            await self.layout.set_contacts_list()
+            self.layout.set_contacts_list()
         elif tr.match('/contacts/create'):
-            await self.layout.set_contact_create()
+            self.layout.set_contact_create()
         elif tr.match('/contacts/:prefix/view'):
-            await self.layout.set_contact_view(tr.prefix)
+            self.layout.set_contact_view(tr.prefix)
         elif tr.match('/settings'):
-            await self.layout.set_settings_view()
+            self.layout.set_settings_view()
         elif tr.match('/notifications'):
-            await self.layout.set_notifications_view()
+            self.layout.set_notifications_view()
         elif tr.match('/notifications/:note_id'):
-            await self.layout.set_notifications_note_view(tr.note_id)
+            self.layout.set_notifications_note_view(tr.note_id)
         elif tr.match('/witnesses'):
-            await self.layout.set_witnesses_view()
+            self.layout.set_witnesses_view()
         elif tr.match('/witnesses/create'):
-            await self.layout.set_witness_add_view()
+            self.layout.set_witness_add_view()
         elif tr.match('/witnesses/:prefix/view'):
-            await self.layout.set_witness_view(tr.prefix)
+            self.layout.set_witness_view(tr.prefix)
         elif tr.match('/identifiers/:prefix/view'):
-            await self.layout.set_witness_view()
+            self.layout.set_witness_view()
         elif tr.match('/splash'):
             logger.info('Route change to /splash')
-            await self.layout.set_splash_view()
+            self.layout.set_splash_view()
 
-        await self.page.update_async()
+        self.page.update()
 
     async def show_notifications(self, e=None):
         self.page.route = '/notifications'
-        await self.page.update_async()
+        self.page.update()
 
     async def lock(self, e=None):
         closed = await close_agent_task(self.agent_task, self.agent_shutdown_event)
@@ -176,7 +209,7 @@ class WalletApp(ft.Stack):
             self.page.hby_name = None
             self.page.snack_bar = None
             self.page.route = '/splash'
-            await self.page.update_async()
+            self.page.update()
 
     async def refreshContacts(self):
         org = connecting.Organizer(hby=self.agent.hby)
@@ -204,7 +237,7 @@ class WalletApp(ft.Stack):
             contacts.append(c)
 
         await self.layout.contacts.set_contacts(contacts)
-        await self.layout.contacts.update_async()
+        self.layout.contacts.update()
 
     def reload(self):
         if self.agent is not None:
@@ -233,16 +266,6 @@ class WalletApp(ft.Stack):
         else:
             self.members = sorted(self.members, key=lambda c: c['id'])
 
-    def build(self):
-        logger.info('Building Wallet App panel...')
-        self.layout = Layout(
-            self,
-            self.page,
-            expand=True,
-            vertical_alignment='start',
-        )
-        return self.layout
-
     # on_change
     @property
     def agent(self):
@@ -256,11 +279,12 @@ class WalletApp(ft.Stack):
             self.layout.splash.visible = False
             self.actions.insert(0, self.notificationsButton)
             self.actions.insert(len(self.actions), self.lockButton)
+            self.page.update()
 
-    async def snack(self, message, duration=5000):
+    def snack(self, message, duration=5000):
+        """Open the snack bar with the given message for the given duration."""
         self.page.snack_bar = ft.SnackBar(ft.Text(message), duration=duration)
-        self.page.snack_bar.open = True
-        await self.page.update_async()
+        self.page.open(self.page.snack_bar)
 
     @property
     def hby(self):

@@ -5,6 +5,7 @@ Identifiers module for the Wallet application.
 import logging
 
 import flet as ft
+from flet.core.icons import Icons
 from keri.app import habbing
 
 from wallet.app import colouring
@@ -64,7 +65,7 @@ class Identifiers(IdentifierBase):
         - None
         """
         self.app.page.route = '/identifiers/create'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     def check_aid_updates(self, pre):
         for update in self.app.agent.aid_updates:
@@ -113,25 +114,25 @@ class Identifiers(IdentifierBase):
                 tip = 'Identifier'
 
                 if isinstance(hab, habbing.GroupHab):
-                    icon = ft.icons.DATASET_LINKED_OUTLINED
+                    icon = Icons.DATASET_LINKED_OUTLINED
                 elif isinstance(hab, habbing.Hab):  # GroupHab does not have .algo prop
-                    icon = ft.icons.LINK_OUTLINED
+                    icon = Icons.LINK_OUTLINED
                 else:
                     logger.error('Unknown hab type: %s', type(hab))
                     raise ValueError(f'Unknown hab type: {type(hab)}')
 
                 # Bug in FLET that doesn't set `data` in constructor
-                view = ft.PopupMenuItem(text='View', icon=ft.icons.PAGEVIEW, on_click=self.view_identifier)
+                view = ft.PopupMenuItem(text='View', icon=ft.Icons.PAGEVIEW, on_click=self.view_identifier)
                 view.data = hab
                 rotate = ft.PopupMenuItem(
                     text='Rotate',
-                    icon=ft.icons.ROTATE_RIGHT,
+                    icon=ft.Icons.ROTATE_RIGHT,
                     on_click=self.rotate_identifier,
                 )
                 rotate.data = hab
                 delete = ft.PopupMenuItem(
                     text='Delete',
-                    icon=ft.icons.DELETE_FOREVER,
+                    icon=ft.Icons.DELETE_FOREVER,
                     on_click=self.delete_identifier,
                 )
                 delete.data = hab
@@ -145,7 +146,7 @@ class Identifiers(IdentifierBase):
                     ]
                 )
                 if needs_update:
-                    title_row.controls.append(ft.Icon(ft.icons.WARNING_AMBER_ROUNDED, tooltip='AID needs to be caught up.'))
+                    title_row.controls.append(ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, tooltip='AID needs to be caught up.'))
                     # self.kel_update_dialog = KELUpdateConfirmDialog(self.app, self.app.page, hab, aid_update)
                     title_row.controls.append(
                         ft.OutlinedButton(text='Update Log', data=(hab, aid_update), on_click=self.kel_update)
@@ -162,7 +163,7 @@ class Identifiers(IdentifierBase):
                     subtitle=title_row,
                     trailing=ft.PopupMenuButton(
                         tooltip=None,
-                        icon=ft.icons.MORE_VERT,
+                        icon=ft.Icons.MORE_VERT,
                         items=[
                             view,
                             rotate,
@@ -180,7 +181,7 @@ class Identifiers(IdentifierBase):
                 )
                 self.list.controls.append(ft.Divider(opacity=0.1))
 
-        await self.update_async()
+        self.update()
 
     async def view_identifier(self, e):
         """
@@ -194,7 +195,7 @@ class Identifiers(IdentifierBase):
         """
         hab = e.control.data
         self.app.page.route = f'/identifiers/{hab.pre}/view'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def rotate_identifier(self, e):
         """
@@ -208,7 +209,7 @@ class Identifiers(IdentifierBase):
         """
         hab = e.control.data
         self.app.page.route = f'/identifiers/{hab.pre}/rotate'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def delete_identifier(self, e):
         """
@@ -223,4 +224,4 @@ class Identifiers(IdentifierBase):
         hab = e.control.data
         self.app.hby.deleteHab(hab.name)
 
-        await self.card.content.update_async()  # type: ignore
+        self.card.content.update()  # type: ignore

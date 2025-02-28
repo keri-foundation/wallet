@@ -7,9 +7,8 @@ import logging
 import flet as ft
 from keri import kering
 from keri.app import configing, directing, habbing
-from keri.core import coring
+from keri.core import signing
 
-from wallet import walleting
 from wallet.app.colouring import Colouring
 from wallet.core.configing import DEFAULT_PASSCODE, DEFAULT_USERNAME, Environments, WalletConfig
 from wallet.core.habs import check_passcode, format_bran, keystore_exists, open_hby
@@ -84,14 +83,14 @@ class AgentInitialization(ft.AlertDialog):
         Opens the agent initialization dialog.
         """
         self.open = True
-        await self.page.update_async()
+        self.page.update()
 
     async def close_init(self, _):
         """
         Closes the agent initialization dialog.
         """
         self.open = False
-        await self.page.update_async()
+        self.page.update()
 
     async def generate_habery(self, e):
         """
@@ -108,7 +107,7 @@ class AgentInitialization(ft.AlertDialog):
         )
         kwa = dict()
 
-        kwa['salt'] = coring.Salter(raw=self.app.salt.encode('utf-8')).qb64
+        kwa['salt'] = signing.Salter(raw=self.app.salt.encode('utf-8')).qb64
         kwa['bran'] = self.passcode.value
         kwa['algo'] = self.app.algo
         kwa['tier'] = self.app.tier
@@ -128,7 +127,7 @@ class AgentInitialization(ft.AlertDialog):
 
         self.app.agentDrawer.update_agents()
 
-        await self.page.update_async()
+        self.page.update()
 
 
 class AgentConnection(ft.AlertDialog):
@@ -203,14 +202,13 @@ class AgentConnection(ft.AlertDialog):
             await migrating.migrate_keystore(name=name, base=base, bran=bran)
         except Exception as ex:
             logger.exception(ex)
-            await self.app.snack(f'Database migration failed for {name}. Error: {str(ex)}')
-            await self.page.update_async()
-            await self.close_connect(e)
+            self.app.snack(f'Database migration failed for {name}. Error: {str(ex)}')
+            self.page.close(self)
             return
-        await self.app.snack(f'Database migration succeeded for: {name}')
+        self.app.snack(f'Database migration succeeded for: {name}')
         await self.agent_connect(name, base, bran)
-        await self.close_connect(e)
-        await self.app.snack(f'Connected to {name}')
+        self.page.close(self)
+        self.app.snack(f'Connected to {name}')
 
     async def close_connect(self, _):
         """
@@ -223,7 +221,7 @@ class AgentConnection(ft.AlertDialog):
         - None
         """
         self.open = False
-        await self.page.update_async()
+        self.page.update()
 
     async def open_connect(self, _):
         """
@@ -236,7 +234,7 @@ class AgentConnection(ft.AlertDialog):
         - None
         """
         self.open = True
-        await self.page.update_async()
+        self.page.update()
 
     @log_errors
     async def agent_connect(self, name, base, passcode):
@@ -250,7 +248,7 @@ class AgentConnection(ft.AlertDialog):
                 app=self.app,
             )
         except kering.AuthError:
-            await self.app.snack('Invalid Username or Passcode, please try again...')
+            self.app.snack('Invalid Username or Passcode, please try again...')
             return
         except Exception as ex:
             logger.error(f'Error opening Habery: {str(ex)}')
@@ -259,7 +257,7 @@ class AgentConnection(ft.AlertDialog):
         self.app.agent_task = agent_task
         self.app.agent_shutdown_event = event
 
-        await self.app.snack('Fetching notifications...')
+        self.app.snack('Fetching notifications...')
 
         self.app.reload_witnesses_and_members()
         self.app.reload()
@@ -267,7 +265,7 @@ class AgentConnection(ft.AlertDialog):
 
         self.page.route = '/identifiers'
         self.page.hby_name = name
-        await self.page.update_async()
+        self.page.update()
 
     @log_errors
     async def on_open(self, e):
@@ -277,7 +275,7 @@ class AgentConnection(ft.AlertDialog):
         bran = format_bran(self.passcode.value)
         if not keystore_exists(name, base):
             logger.error('Keystore must already exist, exiting')
-            await self.app.snack('Keystore not already initialized...')
+            self.app.snack('Keystore not already initialized...')
             return
         logger.info(f'Connecting to {name}')
         # check password first
@@ -285,21 +283,21 @@ class AgentConnection(ft.AlertDialog):
             check_passcode(name=name, base=base, bran=bran)
         except kering.AuthError:
             logger.error(f'Passcode incorrect for user {name}')
-            await self.app.snack('Invalid Username or Passcode, please try again...')
+            self.app.snack('Invalid Username or Passcode, please try again...')
             return
         except Exception as ex:
             logger.exception(ex)
-            await self.app.snack(f'Error checking passcode: {str(ex)}')
+            self.app.snack(f'Error checking passcode: {str(ex)}')
             return
 
         try:
             await check_migration(name, base, bran)
             await self.agent_connect(name, base, bran)
-            await self.close_connect(e)
-            await self.app.snack(f'Connected to {name}')
-        except walleting.OldKeystoreError:
+            self.page.close(self)
+            self.app.snack(f'Connected to {name}')
+        except kering.DatabaseError:
             logger.error('Old keystore detected, migration needed')
-            await self.app.snack(f'Keystore migration needed for {name}. Migrating...')
+            self.app.snack(f'Keystore migration needed for {name}. Migrating...')
             # Then connect if a migration is not needed
             self.title = ft.Text(f'Migrate {name}')
             self.content = ft.Text('Datastore migration needed.')
@@ -313,5 +311,5 @@ class AgentConnection(ft.AlertDialog):
                     on_click=self.close_connect,
                 ),
             ]
-            await self.update_async()
+            self.update()
         logger.info(f'Connected to {name}')

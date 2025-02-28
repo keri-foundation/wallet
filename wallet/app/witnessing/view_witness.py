@@ -6,7 +6,7 @@ import datetime
 import logging
 
 import flet as ft
-from flet_core import padding
+from flet.core import padding
 from keri.app import connecting
 
 from wallet.app.witnessing.witness import WitnessBase
@@ -40,7 +40,7 @@ class ViewWitness(WitnessBase):
                         padding=ft.padding.only(10, 0, 10, 0),
                     ),
                     ft.Container(
-                        ft.IconButton(icon=ft.icons.CLOSE, on_click=self.close),
+                        ft.IconButton(icon=ft.Icons.CLOSE, on_click=self.close),
                         alignment=ft.alignment.top_right,
                         expand=True,
                         padding=ft.padding.only(0, 0, 10, 0),
@@ -105,7 +105,7 @@ class ViewWitness(WitnessBase):
                                             weight=ft.FontWeight.W_200,
                                         ),
                                         ft.IconButton(
-                                            icon=ft.icons.COPY_ROUNDED,
+                                            icon=ft.Icons.COPY_ROUNDED,
                                             data=self.witness['oobi'],
                                             on_click=self.copy_oobi,
                                             padding=padding.only(right=10),
@@ -137,18 +137,15 @@ class ViewWitness(WitnessBase):
     async def close(self, e):
         self.cancelled = True
         self.app.page.route = '/witnesses'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def copy_oobi(self, e):
-        await self.app.page.set_clipboard_async(e.control.data)
-        self.page.snack_bar = ft.SnackBar(ft.Text('OOBI URL Copied!'), duration=2000)
-
-        self.page.snack_bar.open = True
-        await self.page.update_async()
+        self.app.page.set_clipboard(e.control.data)
+        self.app.snack('OOBI URL Copied!', duration=2000)
 
     async def select_identifier(self, e):
         self.selected_identifier = e.control.value
-        await self.update_async()
+        self.update()
 
     async def show_verify(self):
         return self.selected_identifier is not None

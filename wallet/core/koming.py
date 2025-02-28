@@ -24,7 +24,7 @@ class KomerBase:
         db (dbing.LMDBer): instance of LMDB database manager class
         sdb (lmdb._Database): instance of named sub db lmdb for this Komer
         schema (Type[dataclass]): class reference of dataclass subclass
-        kind (str): serialization/deserialization type from coring.Serials
+        kind (str): serialization/deserialization type from coring.Kinds
         serializer (types.MethodType): serializer method
         deserializer (types.MethodType): deserializer method
         sep (str): separator for combining keys tuple of strs into key bytes
@@ -38,7 +38,7 @@ class KomerBase:
         *,
         subkey: str = 'docs.',
         schema: Type[dataclass],  # class not instance
-        kind: str = coring.Serials.json,
+        kind: str = coring.Kinds.json,
         dupsort: bool = False,
         sep: str = None,
         **kwa,
@@ -121,9 +121,9 @@ class KomerBase:
         Parameters:
             kind (str): serialization
         """
-        if kind == coring.Serials.mgpk:
+        if kind == coring.Kinds.mgpk:
             return self.__serializeMGPK
-        elif kind == coring.Serials.cbor:
+        elif kind == coring.Kinds.cbor:
             return self.__serializeCBOR
         else:
             return self.__serializeJSON
@@ -133,9 +133,9 @@ class KomerBase:
         Parameters:
             kind (str): deserialization
         """
-        if kind == coring.Serials.mgpk:
+        if kind == coring.Kinds.mgpk:
             return self.__deserializeMGPK
-        elif kind == coring.Serials.cbor:
+        elif kind == coring.Kinds.cbor:
             return self.__deserializeCBOR
         else:
             return self.__deserializeJSON
@@ -194,7 +194,7 @@ class Komer(KomerBase):
         *,
         subkey: str = 'docs.',
         schema: Type[dataclass],  # class not instance
-        kind: str = coring.Serials.json,
+        kind: str = coring.Kinds.json,
         **kwa,
     ):
         """

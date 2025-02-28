@@ -16,7 +16,7 @@ class Incepter(doing.DoDoer):
         self.hby = hby
         self.hab = hab
         self.proxy = proxy
-        self.swain = delegating.Boatswain(hby=hby)
+        self.swain = delegating.Anchorer(hby=hby)
         self.postman = forwarding.Poster(hby=hby)
         self.mbx = indirecting.MailboxDirector(hby=hby, topics=['/receipt', '/replay', '/reply'])
         self.receiptor = agenting.Receiptor(hby=self.hby)

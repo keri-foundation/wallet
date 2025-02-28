@@ -54,7 +54,7 @@ class Witnesses(WitnessBase):
         - None
         """
         self.app.page.route = '/witnesses/create'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     @log_errors
     async def set_witnesses(self, contacts):
@@ -68,7 +68,7 @@ class Witnesses(WitnessBase):
             None
         """
         contacts = sorted(contacts, key=lambda c: c['alias'])
-        contacts = list(filter(lambda c: 'witness' in c['type'], contacts))
+        contacts = list(filter(lambda c: 'type' in c and 'witness' in c['type'], contacts))
 
         self.list.controls.clear()
 
@@ -102,15 +102,15 @@ class Witnesses(WitnessBase):
                     title = ft.Text(f'{contact["alias"]}')
 
                 tile = ft.ListTile(
-                    leading=ft.Icon(ft.icons.SQUARE, tooltip='Witness'),
+                    leading=ft.Icon(ft.Icons.SQUARE, tooltip='Witness'),
                     title=title,
                     subtitle=ft.Text(contact['id'], font_family='monospace'),
                     trailing=ft.PopupMenuButton(
                         tooltip=None,
-                        icon=ft.icons.MORE_VERT,
+                        icon=ft.Icons.MORE_VERT,
                         items=[
-                            ft.PopupMenuItem(text='View', icon=ft.icons.PAGEVIEW, on_click=self.view_witness, data=pre),
-                            ft.PopupMenuItem(text='Delete', icon=ft.icons.DELETE_FOREVER),
+                            ft.PopupMenuItem(text='View', icon=ft.Icons.PAGEVIEW, on_click=self.view_witness, data=pre),
+                            ft.PopupMenuItem(text='Delete', icon=ft.Icons.DELETE_FOREVER),
                         ],
                     ),
                     on_click=self.view_witness,
@@ -124,9 +124,9 @@ class Witnesses(WitnessBase):
                 )
                 self.list.controls.append(ft.Divider(opacity=0.1))
 
-        await self.update_async()
+        self.update()
 
     @log_errors
     async def view_witness(self, e):
         self.app.page.route = f'/witnesses/{e.control.data}/view'
-        await self.app.page.update_async()
+        self.app.page.update()

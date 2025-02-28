@@ -10,8 +10,13 @@ setup:
 	@uv venv
 	@uv lock
 
-build-macos: clean version
-	@uv run flet build -o ./build macos
+# use the --clear-cache command as of Flet 0.25.0 to clear the build/flutter project.
+# to speed up rebuilds then as of Flet 0.25.0 the build/flutter project is not re-created on every build.
+build-macos: version
+	@uv run flet build \
+		--compile-app \
+		--compile-packages \
+		macos
 
 dev: version
 	@export FLET_DEBUG=1; export WALLET_ENVIRONMENT=development; uv run flet run main.py

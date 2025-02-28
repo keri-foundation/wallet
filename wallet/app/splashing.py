@@ -26,6 +26,3 @@ class Splash(ft.Column):
             spacing=25,
             expand=True,
         )
-
-    def did_mount(self):
-        self.page.run_task(self.app.toggle_drawer, None)

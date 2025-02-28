@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 
 import flet as ft
 import qrcode
-from flet_core import padding
+from flet.core import padding
 from keri import kering
 from keri.app import habbing
 from keri.app.keeping import Algos
@@ -128,7 +128,7 @@ class ViewIdentifierPanel(IdentifierBase):
                         padding=ft.padding.only(10, 0, 10, 0),
                     ),
                     ft.Container(
-                        ft.IconButton(icon=ft.icons.CLOSE, on_click=self.cancel),
+                        ft.IconButton(icon=ft.Icons.CLOSE, on_click=self.cancel),
                         alignment=ft.alignment.top_right,
                         expand=True,
                         padding=ft.padding.only(0, 0, 10, 0),
@@ -152,11 +152,8 @@ class ViewIdentifierPanel(IdentifierBase):
         f.seek(0)
 
         async def copy(e):
-            await self.app.page.set_clipboard_async(e.control.data)
-            self.page.snack_bar = ft.SnackBar(ft.Text('OOBI URL Copied!'), duration=2000)
-
-            self.page.snack_bar.open = True
-            await self.page.update_async()
+            self.app.page.set_clipboard(e.control.data)
+            self.app.snack('OOBI URL Copied!', duration=2000)
 
         self.oobi_qr = ft.Image(src_base64=base64.b64encode(f.read()).decode('utf-8'), width=175)
         self.oobi_url = ft.Container(
@@ -172,7 +169,7 @@ class ViewIdentifierPanel(IdentifierBase):
             on_click=copy,
             data=oobi,
         )
-        self.oobi_copy = ft.IconButton(icon=ft.icons.COPY_ROUNDED, data=oobi, on_click=copy, tooltip='Copy OOBI')
+        self.oobi_copy = ft.IconButton(icon=ft.Icons.COPY_ROUNDED, data=oobi, on_click=copy, tooltip='Copy OOBI')
 
         self.oobiTabs.controls.clear()
         self.oobiTabs.controls.append(
@@ -189,15 +186,12 @@ class ViewIdentifierPanel(IdentifierBase):
 
     async def reset_oobi(self):
         self.oobiTabs.controls.clear()
-        await self.update_async()
+        self.update()
 
     async def layout_oobi(self, e):
         if not self.generate_oobi(e.data):
-            self.page.snack_bar = ft.SnackBar(ft.Text(f'No {e} OOBIs'), duration=2000)
-            await self.page.update_async()
-
-            await self.reset_oobi()
-        await self.update_async()
+            self.app.snack(f'No {e} OOBIs', duration=2000)
+        self.update()
 
     @log_errors
     async def refresh_keystate(self, e):
@@ -213,14 +207,14 @@ class ViewIdentifierPanel(IdentifierBase):
             contact = self.org.get(pre)
             logger.info(f'Querying key state for {contact["alias"]} with pre: {pre}')
             await OOBIResolverService(self.app).resolve_oobi(pre=pre, oobi=contact['oobi'], force=True)
-            await self.app.snack(f"Resolved {contact['alias']}'s key state for AID {pre}")
+            self.app.snack(f"Resolved {contact['alias']}'s key state for AID {pre}")
 
     async def resubmit(self, _):
         self.app.agent.witness_resubmit(self.hab.pre)
-        await self.app.snack(f'Resubmitting {self.hab.pre} for witness receipts.')
+        self.app.snack(f'Resubmitting {self.hab.pre} for witness receipts.')
         self.resubmit_button.visible = False
         self.submit_refresh_row.visible = True
-        await self.page.update_async()
+        self.page.update()
 
         updated = False
         while not updated:
@@ -231,11 +225,11 @@ class ViewIdentifierPanel(IdentifierBase):
 
         if updated:
             self.submit_refresh_row.visible = False
-            await self.app.snack(f'Received all witness receipts for {self.hab.pre}.')
-            await self.page.update_async()
+            self.app.snack(f'Received all witness receipts for {self.hab.pre}.')
+            self.page.update()
         else:
-            await self.app.snack(f'Failed to receive witness receipts for {self.hab.pre}.')
-            await self.page.update_async()
+            self.app.snack(f'Failed to receive witness receipts for {self.hab.pre}.')
+            self.page.update()
             self.submit_refresh_row.visible = False
             self.resubmit_button.visible = True
 
@@ -244,25 +238,21 @@ class ViewIdentifierPanel(IdentifierBase):
         """Navigate to the single sig rotate panel."""
         hab = self.hab
         self.app.page.route = f'/identifiers/{hab.pre}/rotate'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def cancel(self, e):
         self.app.page.route = '/identifiers'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def cb_copy_digest(self, e):
         """copies the latest event digest to clipboard"""
-        await self.app.page.set_clipboard_async(e.control.data)
-        self.page.snack_bar = ft.SnackBar(ft.Text('Event Digest Copied!'), duration=2000)
-        self.page.snack_bar.open = True
-        await self.page.update_async()
+        self.app.page.set_clipboard(e.control.data)
+        self.app.snack('Event Digest Copied!', duration=2000)
 
     async def cb_copy_sn(self, e):
         """copies the latest event sequence number to clipboard"""
-        await self.app.page.set_clipboard_async(f'{e.control.data}')
-        self.page.snack_bar = ft.SnackBar(ft.Text('Sequence Number Copied!'), duration=2000)
-        self.page.snack_bar.open = True
-        await self.page.update_async()
+        self.app.page.set_clipboard(f'{e.control.data}')
+        self.app.snack('Sequence Number Copied!', duration=2000)
 
     def panel(self):
         kever = self.hab.kever
@@ -284,7 +274,7 @@ class ViewIdentifierPanel(IdentifierBase):
                             ft.Text('Sequence Number:', weight=ft.FontWeight.BOLD, width=175),
                             ft.Container(content=ft.Text(kever.sner.num), on_click=self.cb_copy_sn, data=kever.sner.num),
                             ft.IconButton(
-                                icon=ft.icons.COPY_ROUNDED,
+                                icon=ft.Icons.COPY_ROUNDED,
                                 data=kever.sner.num,
                                 on_click=self.cb_copy_sn,
                                 tooltip='Copy Sequence Number',
@@ -300,7 +290,7 @@ class ViewIdentifierPanel(IdentifierBase):
                                 data=kever.serder.ked['d'],
                             ),
                             ft.IconButton(
-                                icon=ft.icons.COPY_ROUNDED,
+                                icon=ft.Icons.COPY_ROUNDED,
                                 data=kever.serder.ked['d'],
                                 on_click=self.cb_copy_digest,
                                 tooltip='Copy Digest',
@@ -315,7 +305,7 @@ class ViewIdentifierPanel(IdentifierBase):
                                     ft.Text('Refresh Key State:', width=175, weight=ft.FontWeight.BOLD),
                                     ft.IconButton(
                                         tooltip='Refresh key state',
-                                        icon=ft.icons.REFRESH_ROUNDED,
+                                        icon=ft.Icons.REFRESH_ROUNDED,
                                         on_click=self.refresh_keystate,
                                         padding=padding.only(right=10),
                                     ),
@@ -412,7 +402,7 @@ class ViewIdentifierPanel(IdentifierBase):
                             ft.Row(
                                 controls=[
                                     ft.IconButton(
-                                        icon=ft.icons.ROTATE_LEFT_ROUNDED,
+                                        icon=ft.Icons.ROTATE_LEFT_ROUNDED,
                                         on_click=self.rotate_identifier,
                                         tooltip='Rotate',
                                     )
@@ -513,4 +503,4 @@ class ViewIdentifierPanel(IdentifierBase):
 
     async def close(self, _):
         self.app.page.route = '/identifiers'
-        await self.app.page.update_async()
+        self.app.page.update()

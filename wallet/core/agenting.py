@@ -29,7 +29,6 @@ from keri.vc import protocoling
 from keri.vdr import credentialing, verifying
 from keri.vdr.eventing import Tevery
 
-from wallet.app.colouring import Colouring
 from wallet.core.grouping import GroupRequester
 from wallet.core.syncing import KELStateReader, KELStateUpdater
 from wallet.logs import log_errors
@@ -47,7 +46,7 @@ class Agent(doing.DoDoer):
         self.hby = hby
         self.rgy = rgy
 
-        self.swain = delegating.Sealer(hby=hby)
+        self.swain = delegating.Anchorer(hby=hby)
         self.counselor = grouping.Counselor(hby=hby, swain=self.swain)
         self.org = connecting.Organizer(hby=hby)
 
@@ -203,7 +202,7 @@ class Witnesser(doing.Doer):
             if self.cues:
                 cue = self.cues.popleft()
                 serder = cue['serder']
-                await self.app.snack(f'Witness receipts received for {serder.pre}.')
+                self.app.snack(f'Witness receipts received for {serder.pre}.')
 
             await asyncio.sleep(1.0)
 
@@ -292,19 +291,19 @@ class Noter(doing.Doer):
         super(Noter, self).__init__(**kwa)
 
     async def show_new_notifications(self):
-        await self.app.snack('New notifications')
+        self.app.snack('New notifications')
 
     async def show_unread(self):
-        self.app.notificationsButton.icon = ft.icons.NOTIFICATIONS_ACTIVE_ROUNDED
-        await self.app.page.update_async()
+        self.app.notificationsButton.icon = ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED
+        self.app.page.update()
 
     async def show_read(self):
-        self.app.notificationsButton.icon = ft.icons.NOTIFICATIONS_ROUNDED
-        await self.app.page.update_async()
+        self.app.notificationsButton.icon = ft.Icons.NOTIFICATIONS_ROUNDED
+        self.app.page.update()
 
     async def show_no_notifications(self):
-        self.app.notificationsButton.icon = ft.icons.NOTIFICATIONS_NONE_ROUNDED
-        await self.app.page.update_async()
+        self.app.notificationsButton.icon = ft.Icons.NOTIFICATIONS_NONE_ROUNDED
+        self.app.page.update()
 
     def enter(self):
         self.count = self.notifier.getNoteCnt()

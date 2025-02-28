@@ -5,9 +5,11 @@ create_identifier.py - Panel for creating a new identifier
 import logging
 
 import flet as ft
-from flet_core import FontWeight, padding
+from flet.core import padding
+from flet.core.icons import Icons
+from flet.core.types import FontWeight
 from keri.app import connecting
-from keri.core import coring
+from keri.core import coring, signing
 
 from wallet.app.identifying.identifier import IdentifierBase
 from wallet.core.configing import Environments
@@ -82,12 +84,12 @@ class CreateIdentifierPanel(IdentifierBase):
             width=420,
             text_size=12,
             height=55,
-            # border_color=ft.colors.with_opacity(0.25, ft.colors.GREY),
+            # border_color=ft.Colors.with_opacity(0.25, ft.Colors.GREY),
             disabled=True,
             text_style=ft.TextStyle(font_family='monospace'),
         )
         self.rotationAddButton = ft.IconButton(
-            icon=ft.icons.ADD,
+            icon=ft.Icons.ADD,
             tooltip='Add Member',
             on_click=self.add_rotation,
             disabled=True,
@@ -101,7 +103,7 @@ class CreateIdentifierPanel(IdentifierBase):
 
         async def resalt(_):
             self.salt.value = coring.randomNonce()[2:23]
-            await self.salt.update_async()
+            self.salt.update()
 
         self.salty = ft.Column(
             [
@@ -109,7 +111,7 @@ class CreateIdentifierPanel(IdentifierBase):
                     [
                         self.salt,
                         ft.IconButton(
-                            icon=ft.icons.CHANGE_CIRCLE_OUTLINED,
+                            icon=ft.Icons.CHANGE_CIRCLE_OUTLINED,
                             on_click=resalt,
                         ),
                     ]
@@ -136,7 +138,7 @@ class CreateIdentifierPanel(IdentifierBase):
                     [
                         self.signingDropdown,
                         ft.IconButton(
-                            icon=ft.icons.ADD,
+                            icon=ft.Icons.ADD,
                             tooltip='Add Member',
                             on_click=self.addMember,
                         ),
@@ -198,7 +200,7 @@ class CreateIdentifierPanel(IdentifierBase):
             controls=[
                 self.witnessDropdown,
                 ft.IconButton(
-                    icon=ft.icons.ADD,
+                    icon=ft.Icons.ADD,
                     tooltip='Add Witness',
                     on_click=self.addWitness,
                 ),
@@ -227,7 +229,7 @@ class CreateIdentifierPanel(IdentifierBase):
                 self.keyTypePanel.content = self.randy
             case 'group':
                 self.keyTypePanel.content = self.group
-        await self.update_async()
+        self.update()
 
     def witnessTile(self, wit_ct, on_delete):
         """
@@ -241,7 +243,7 @@ class CreateIdentifierPanel(IdentifierBase):
         return ft.ListTile(
             title=title,
             trailing=ft.IconButton(
-                ft.icons.DELETE_OUTLINED,
+                Icons.DELETE_OUTLINED,
                 on_click=on_delete,
                 data=wit_ct['id'],
             ),
@@ -250,23 +252,23 @@ class CreateIdentifierPanel(IdentifierBase):
 
     async def addWitness(self, _):
         if not self.witnessDropdown.value:
-            await self.app.snack('Please select a witness')
+            self.app.snack('Please select a witness')
             return
         witness = self.witnessDropdown.value
         self.witnessDropdown.value = None
 
         if self.findSelectedWitness(witness) is not None:
-            await self.app.snack(f'You can not add {witness} more than once')
+            self.app.snack(f'You can not add {witness} more than once')
             return
 
         witness = self.org.get(witness)
         self.witnessList.controls.append(self.witnessTile(witness, self.deleteWitness))
 
         self.toad.value = str(self.recommendedThold(len(self.witnessList.controls)))
-        await self.toad.update_async()
+        self.toad.update()
 
-        await self.witnessDropdown.update_async()
-        await self.witnessList.update_async()
+        self.witnessDropdown.update()
+        self.witnessList.update()
 
     async def deleteWitness(self, e):
         aid = e.control.data
@@ -274,8 +276,8 @@ class CreateIdentifierPanel(IdentifierBase):
             self.witnessList.controls.remove(tile)
 
         self.toad.value = str(self.recommendedThold(len(self.witnessList.controls)))
-        await self.toad.update_async()
-        await self.witnessList.update_async()
+        self.toad.update()
+        self.witnessList.update()
 
     def findSelectedWitness(self, aid):
         for tile in self.witnessList.controls:
@@ -295,7 +297,7 @@ class CreateIdentifierPanel(IdentifierBase):
                 title=ft.Text(f'{m["alias"]}', size=14),
                 subtitle=ft.Text(f'({m["id"]})', font_family='monospace', size=10),
                 trailing=ft.IconButton(
-                    ft.icons.DELETE_OUTLINED,
+                    Icons.DELETE_OUTLINED,
                     on_click=self.deleteMember,
                     data=self.signingDropdown.value,
                 ),
@@ -308,8 +310,8 @@ class CreateIdentifierPanel(IdentifierBase):
                 self.signingDropdown.options.remove(option)
 
         self.signingDropdown.value = None
-        await self.signingDropdown.update_async()
-        await self.signingList.update_async()
+        self.signingDropdown.update()
+        self.signingList.update()
 
     async def enableRotationMembers(self, e):
         self.rotationDropdown.disabled = not e.control.value
@@ -317,10 +319,10 @@ class CreateIdentifierPanel(IdentifierBase):
         self.rotationAddButton.disabled = not e.control.value
         self.rotationList.controls.clear()
 
-        await self.rotationList.update_async()
-        await self.rotationDropdown.update_async()
-        await self.rotSith.update_async()
-        await self.rotationAddButton.update_async()
+        self.rotationList.update()
+        self.rotationDropdown.update()
+        self.rotSith.update()
+        self.rotationAddButton.update()
 
     async def add_rotation(self, _):
         if self.rotationDropdown.value is None:
@@ -333,7 +335,7 @@ class CreateIdentifierPanel(IdentifierBase):
                 title=ft.Text(f'{m["alias"]}', size=14),
                 subtitle=ft.Text(f'({m["id"]})', font_family='monospace', size=10),
                 trailing=ft.IconButton(
-                    ft.icons.DELETE_OUTLINED,
+                    Icons.DELETE_OUTLINED,
                     on_click=self.deleteRotation,
                     data=self.rotationDropdown.value,
                 ),
@@ -346,8 +348,8 @@ class CreateIdentifierPanel(IdentifierBase):
                 self.rotationDropdown.options.remove(option)
 
         self.rotationDropdown.value = None
-        await self.rotationDropdown.update_async()
-        await self.rotationList.update_async()
+        self.rotationDropdown.update()
+        self.rotationList.update()
 
     async def deleteMember(self, e):
         aid = e.control.data
@@ -358,9 +360,9 @@ class CreateIdentifierPanel(IdentifierBase):
                 break
 
         self.toad.value = str(self.recommendedThold(len(self.signingList.controls)))
-        await self.toad.update_async()
-        await self.signingDropdown.update_async()
-        await self.signingList.update_async()
+        self.toad.update()
+        self.signingDropdown.update()
+        self.signingList.update()
 
     async def deleteRotation(self, e):
         aid = e.control.data
@@ -371,22 +373,22 @@ class CreateIdentifierPanel(IdentifierBase):
                 break
 
         self.toad.value = str(self.recommendedThold(len(self.rotationList.controls)))
-        await self.toad.update_async()
-        await self.rotationDropdown.update_async()
-        await self.rotationList.update_async()
+        self.toad.update()
+        self.rotationDropdown.update()
+        self.rotationList.update()
 
     async def createAid(self, _):
         if self.alias.value == '':
-            await self.app.snack('Alias is required')
+            self.app.snack('Alias is required')
             return
 
         kwargs = dict(algo=self.keyType)
         if self.keyType == 'salty':
             if self.salt.value is None or len(self.salt.value) != 21:
-                await self.app.snack('Salt is required and must be 21 characters long')
+                self.app.snack('Salt is required and must be 21 characters long')
                 return
 
-            kwargs['salt'] = coring.Salter(raw=self.salt.value.encode('utf-8')).qb64
+            kwargs['salt'] = signing.Salter(raw=self.salt.value.encode('utf-8')).qb64
             kwargs['icount'] = int(self.keyCount.value)
             kwargs['isith'] = int(self.keySith.value)
             kwargs['ncount'] = int(self.nkeyCount.value)
@@ -434,25 +436,25 @@ class CreateIdentifierPanel(IdentifierBase):
             serder, _, _ = hab.getOwnEvent(allowPartiallySigned=True)
 
             self.app.agent.groups.push(dict(serder=serder))
-            await self.app.snack(f'Creating {hab.pre}, waiting for multisig collaboration...')
+            self.app.snack(f'Creating {hab.pre}, waiting for multisig collaboration...')
         else:
             hab = self.app.hby.makeHab(name=self.alias.value, **kwargs)
             serder, _, _ = hab.getOwnEvent(sn=0)
 
             if delpre:
                 self.app.agent.anchors.push(dict(sn=0))
-                await self.app.snack(f'Creating {hab.pre}, waiting for delegation approval...')
+                self.app.snack(f'Creating {hab.pre}, waiting for delegation approval...')
 
             elif len(kwargs['wits']) > 0:
                 self.app.agent.witners.push(dict(serder=serder))
-                await self.app.snack(f'Creating {hab.pre}, waiting for witness receipts...')
+                self.app.snack(f'Creating {hab.pre}, waiting for witness receipts...')
 
             else:
-                await self.app.snack(f'Created AID {hab.pre}.')
+                self.app.snack(f'Created AID {hab.pre}.')
 
         self.reset()
         self.app.page.route = '/identifiers'
-        await self.page.update_async()
+        self.page.update()
 
     @staticmethod
     def loadWitnesses(app):
@@ -476,7 +478,7 @@ class CreateIdentifierPanel(IdentifierBase):
     async def cancel(self, _):
         self.reset()
         self.app.page.route = '/identifiers'
-        await self.page.update_async()
+        self.page.update()
 
     def reset(self):
         self.alias.value = ''
@@ -515,7 +517,7 @@ class CreateIdentifierPanel(IdentifierBase):
             return
         pool = self.witnessPoolDropdown.value
         await self.addWitnessesFromPool(pool)
-        await self.witnessPoolDropdown.update_async()
+        self.witnessPoolDropdown.update()
 
     async def addWitnessesFromPoolRadioButton(self, e):
         pool = e.control.value
@@ -539,8 +541,8 @@ class CreateIdentifierPanel(IdentifierBase):
         self.witnessPoolDropdown.value = None
 
         self.toad.value = str(self.recommendedThold(len(self.witnessList.controls)))
-        await self.toad.update_async()
-        await self.witnessList.update_async()
+        self.toad.update()
+        self.witnessList.update()
 
     @log_errors
     async def on_use_pool_change(self, e):
@@ -550,16 +552,16 @@ class CreateIdentifierPanel(IdentifierBase):
             self.witnessSelectorRow.controls.clear()
             self.witnessSelectorRow.controls.append(self.witnessPoolDropdown)
             self.witnessSelectorRow.controls.append(
-                ft.IconButton(icon=ft.icons.ADD, tooltip='Add Witnesses in Pool', on_click=self.addWitnessesFromPoolDropdown)
+                ft.IconButton(icon=ft.Icons.ADD, tooltip='Add Witnesses in Pool', on_click=self.addWitnessesFromPoolDropdown)
             )
         else:
             logger.info(f'Use witness list {self.app.witnesses}')
             self.witnessSelectorRow.controls.clear()
             self.witnessSelectorRow.controls.append(self.witnessDropdown)
             self.witnessSelectorRow.controls.append(
-                ft.IconButton(icon=ft.icons.ADD, tooltip='Add Witnesses', on_click=self.addWitness)
+                ft.IconButton(icon=ft.Icons.ADD, tooltip='Add Witnesses', on_click=self.addWitness)
             )
-        await self.page.update_async()
+        self.page.update()
 
     @log_errors
     async def on_pool_radio_change(self, e):

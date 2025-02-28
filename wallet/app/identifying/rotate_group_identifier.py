@@ -6,7 +6,7 @@ import logging
 from typing import List, Set
 
 import flet as ft
-from flet_core import FontWeight
+from flet.core.types import FontWeight
 from keri import kering
 from keri.app import connecting
 from keri.app.habbing import GroupHab, Hab, Habery
@@ -134,7 +134,7 @@ class RotateGroupIdentifierPanel(IdentifierBase):
                     padding=ft.padding.only(10, 0, 10, 0),
                 ),
                 ft.Container(
-                    ft.IconButton(icon=ft.icons.CLOSE, on_click=self.back_to_identifier),
+                    ft.IconButton(icon=ft.Icons.CLOSE, on_click=self.back_to_identifier),
                     alignment=ft.alignment.top_right,
                     expand=True,
                     padding=ft.padding.only(0, 0, 10, 0),
@@ -205,15 +205,15 @@ class RotateGroupIdentifierPanel(IdentifierBase):
         if pre in self.hby.habs.keys():
             return  # Do not need to query own key state.
         await OOBIResolverService(self.app).resolve_oobi(pre=pre, oobi=contact['oobi'], alias=contact['alias'])
-        await self.app.snack(f"Resolved {alias}'s key state for AID {pre}...")
+        self.app.snack(f"Resolved {alias}'s key state for AID {pre}...")
 
     async def show_progress_ring(self):
         self.rotate_progress_ring.visible = True
-        await self.page.update_async()
+        self.page.update()
 
     async def hide_progress_ring(self):
         self.rotate_progress_ring.visible = False
-        await self.page.update_async()
+        self.page.update()
 
     def get_sthold(self, pre, signer_count):
         if self.use_prior_thresholds:
@@ -261,7 +261,7 @@ class RotateGroupIdentifierPanel(IdentifierBase):
         Adds a participant to both the current signers and rotators.
         """
         if self.next_dropdown.value is None:
-            await self.app.snack('Must select a member in order to add.')
+            self.app.snack('Must select a member in order to add.')
             return
 
         pre = self.next_dropdown.value
@@ -384,7 +384,7 @@ class RotateGroupIdentifierPanel(IdentifierBase):
     @log_errors
     async def back_to_identifier(self, e):
         self.app.page.route = f'/identifiers/{self.group_hab.pre}/view'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     @log_errors
     async def on_rotate(self, _):
@@ -393,7 +393,7 @@ class RotateGroupIdentifierPanel(IdentifierBase):
         rmids = [p.pre for p in self.next_participants.values() if p.rthold is not None]
         nsith = [p.rthold for p in self.next_participants.values() if p.rthold is not None]
         if len(rmids) == 0:
-            await self.app.snack('Error: No rotation members selected. Select rotation members to perform rotation')
+            self.app.snack('Error: No rotation members selected. Select rotation members to perform rotation')
             return
         try:
             hex_toad = f'{self.toad_field.value:0x}'  # BaseHab.rotate expects hex encoded TOAD
@@ -412,7 +412,7 @@ class RotateGroupIdentifierPanel(IdentifierBase):
             )
         except kering.ValidationError as ex:
             if 'invalid rotation' in ex.args[0]:
-                await self.app.snack(
+                self.app.snack(
                     'Error: Invalid rotation members or keystate. Rotate keys and refresh keystate for all members.', 10000
                 )
                 return
@@ -422,12 +422,12 @@ class RotateGroupIdentifierPanel(IdentifierBase):
         await self.show_progress_ring()
 
         self.app.agent.groups.push(dict(serder=serdering.SerderKERI(raw=rot), rot=rot, smids=smids, rmids=rmids))
-        await self.app.snack(f'Rotating multisig identifier{self.group_hab.pre}, waiting for multisig collaboration...')
+        self.app.snack(f'Rotating multisig identifier{self.group_hab.pre}, waiting for multisig collaboration...')
 
     @log_errors
     async def on_cancel(self, _):
         self.app.page.route = '/identifiers'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     @log_errors
     async def edit_handler(self, e):
@@ -457,10 +457,10 @@ class RotateGroupIdentifierPanel(IdentifierBase):
                 ft.DataCell(ft.Text(f'{sthold if sthold else ""}')),
                 ft.DataCell(ft.Checkbox(value=True, data=pre, on_change=self.toggle_rotation_participant)),
                 ft.DataCell(ft.Text(f'{rthold if rthold else ""}')),
-                ft.DataCell(ft.IconButton(icon=ft.icons.MODE_EDIT_OUTLINE, data=pre, on_click=self.edit_handler)),
+                ft.DataCell(ft.IconButton(icon=ft.Icons.MODE_EDIT_OUTLINE, data=pre, on_click=self.edit_handler)),
                 ft.DataCell(
                     ft.IconButton(
-                        icon=ft.icons.DELETE, data=pre, on_click=self.delete_handler, icon_color=Colouring.get(Colouring.RED)
+                        icon=ft.Icons.DELETE, data=pre, on_click=self.delete_handler, icon_color=Colouring.get(Colouring.RED)
                     )
                 ),
             ],
@@ -566,7 +566,7 @@ class RotateGroupIdentifierPanel(IdentifierBase):
                                 [
                                     self.next_dropdown,
                                     ft.IconButton(
-                                        icon=ft.icons.ADD,
+                                        icon=ft.Icons.ADD,
                                         tooltip='Add Member',
                                         on_click=self.add_handler,
                                     ),
@@ -701,14 +701,14 @@ class ThresholdChangeDialog(ft.AlertDialog):
         Opens dialog
         """
         self.open = True
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def close_dialog(self, _):
         """
         Closes dialog
         """
         self.open = False
-        await self.page.update_async()
+        self.page.update()
 
     async def show_error(self, message):
         """
@@ -716,8 +716,8 @@ class ThresholdChangeDialog(ft.AlertDialog):
         """
         self.error_text.value = message
         self.error_text.visible = True
-        await self.page.update_async()
-        await self.app.snack(message, duration=3000)
+        self.page.update()
+        self.app.snack(message, duration=3000)
 
     async def hide_error(self):
         """
@@ -725,7 +725,7 @@ class ThresholdChangeDialog(ft.AlertDialog):
         """
         self.error_text.value = ''
         self.error_text.visible = False
-        await self.page.update_async()
+        self.page.update()
 
     async def confirm_update(self, e):
         """

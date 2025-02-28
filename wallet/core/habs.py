@@ -2,7 +2,7 @@ import logging
 
 from keri import kering
 from keri.app import configing, habbing, keeping
-from keri.core import coring
+from keri.core import coring, signing
 from keri.vdr import credentialing
 
 from wallet.core.agenting import runController
@@ -24,15 +24,15 @@ def check_passcode(name, base, bran, salt=None, tier=None, pidx=None, algo=None,
         if len(bran) < 21:
             raise ValueError('Bran (passcode seed material) too short.')
         bran = coring.MtrDex.Salt_128 + 'A' + bran[:21]  # qb64 salt for seed
-        signer = coring.Salter(qb64=bran).signer(transferable=False, tier=None, temp=None)
+        signer = signing.Salter(qb64=bran).signer(transferable=False, tier=None, temp=None)
         seed = signer.qb64
         if not aeid:  # aeid must not be empty event on initial creation
             aeid = signer.verfer.qb64  # lest it remove encryption
 
     if salt is None:  # salt for signing keys not aeid seed
-        salt = coring.Salter(raw=b'0123456789abcdef').qb64
+        salt = signing.Salter(raw=b'0123456789abcdef').qb64
     else:
-        salt = coring.Salter(qb64=salt).qb64
+        salt = signing.Salter(qb64=salt).qb64
 
     try:
         keeping.Manager(ks=ks, seed=seed, aeid=aeid, pidx=pidx, algo=algo, salt=salt, tier=tier)

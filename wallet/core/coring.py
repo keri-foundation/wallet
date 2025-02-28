@@ -20,7 +20,7 @@ class Serder(Sadder):
     Properties:
         .raw is bytes of serialized event only
         .ked is key event dict
-        .kind is serialization kind string value (see namedtuple coring.Serials)
+        .kind is serialization kind string value (see namedtuple coring.Kinds)
         .version is Versionage instance of event version
         .size is int of number of bytes in serialed event only
         .diger is Diger instance of digest of .raw
@@ -40,7 +40,7 @@ class Serder(Sadder):
     Hidden Attributes:
           ._raw is bytes of serialized event only
           ._ked is key event dict
-          ._kind is serialization kind string value (see namedtuple coring.Serials)
+          ._kind is serialization kind string value (see namedtuple coring.Kinds)
             supported kinds are 'json', 'cbor', 'msgpack', 'binary'
           ._version is Versionage instance of event version
           ._size is int of number of bytes in serialed event only
@@ -63,7 +63,7 @@ class Serder(Sadder):
           ked is key event dict or None
             if None its deserialized from raw
           sad (Sadder) is clonable base class
-          kind is serialization kind string value or None (see namedtuple coring.Serials)
+          kind is serialization kind string value or None (see namedtuple coring.Kinds)
             supported kinds are 'json', 'cbor', 'msgpack', 'binary'
             if kind is None then its extracted from ked or raw
           code is .diger default digest code

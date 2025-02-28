@@ -4,15 +4,18 @@ import urllib.parse
 from urllib.parse import urlparse
 
 import flet as ft
-from flet_core import padding
+from flet.core import padding
+from flet.core.icons import Icons
 from keri.app import connecting
 
-from wallet.app.contacting.contact import ContactBase
+from wallet.app.contacting.contact import ContactBase, filter_witnesses
 
 logger = logging.getLogger('wallet')
 
 
 class Contacts(ContactBase):
+    """Contacts page showing all contacts that have had an OOBI resolution performed for."""
+
     def __init__(self, app):
         self.app = app
         self.list = ft.Column([], spacing=0, expand=True)
@@ -29,16 +32,15 @@ class Contacts(ContactBase):
 
     async def add_contact(self, _):
         self.app.page.route = '/contacts/create'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def set_contacts(self, contacts):
         self.list.controls.clear()
-        icon = ft.icons.PERSON
+        icon = Icons.PERSON
         tip = 'Contacts'
 
         contacts = sorted(contacts, key=lambda c: c['alias'])
-        contacts = list(filter(lambda c: 'tag=witness' not in c['oobi'], contacts))
-        contacts = list(filter(lambda c: 'witness' not in c['type'], contacts))
+        contacts = filter_witnesses(contacts)
 
         if len(contacts) == 0:
             self.list.controls.append(
@@ -59,7 +61,7 @@ class Contacts(ContactBase):
 
                 view = ft.PopupMenuItem(
                     text='View',
-                    icon=ft.icons.PAGEVIEW,
+                    icon=ft.Icons.PAGEVIEW,
                     on_click=self.view_contact,
                 )
                 view.data = contact
@@ -83,10 +85,10 @@ class Contacts(ContactBase):
                     subtitle=ft.Text(contact['id'], font_family='monospace'),
                     trailing=ft.PopupMenuButton(
                         tooltip=None,
-                        icon=ft.icons.MORE_VERT,
+                        icon=ft.Icons.MORE_VERT,
                         items=[
                             view,
-                            ft.PopupMenuItem(text='Delete', icon=ft.icons.DELETE_FOREVER),
+                            ft.PopupMenuItem(text='Delete', icon=ft.Icons.DELETE_FOREVER),
                         ],
                     ),
                     on_click=self.view_contact,
@@ -96,9 +98,9 @@ class Contacts(ContactBase):
                 self.list.controls.append(ft.Container(content=tile))
                 self.list.controls.append(ft.Divider(opacity=0.1))
 
-        await self.update_async()
+        self.update()
 
     async def view_contact(self, e):
         contact = e.control.data
         self.app.page.route = f'/contacts/{contact["id"]}/view'
-        await self.app.page.update_async()
+        self.app.page.update()

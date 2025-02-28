@@ -13,26 +13,26 @@ class Navbar(ft.Stack):
 
         destinations = [
             ft.NavigationRailDestination(
-                icon=ft.icons.DATASET_LINKED,
-                selected_icon=ft.icons.DATASET_LINKED_OUTLINED,
+                icon=ft.Icons.DATASET_LINKED,
+                selected_icon=ft.Icons.DATASET_LINKED_OUTLINED,
                 label='Identifiers',
                 padding=ft.padding.all(10),
             ),
             ft.NavigationRailDestination(
-                icon_content=ft.Icon(ft.icons.PEOPLE),
-                selected_icon_content=ft.Icon(ft.icons.PEOPLE_OUTLINE),
+                icon_content=ft.Icon(ft.Icons.PEOPLE),
+                selected_icon_content=ft.Icon(ft.Icons.PEOPLE_OUTLINE),
                 label='Contacts',
                 padding=ft.padding.all(10),
             ),
             ft.NavigationRailDestination(
-                icon_content=ft.Icon(ft.icons.VIEW_COMFY_ALT),
-                selected_icon_content=ft.Icon(ft.icons.VIEW_COMFY_ALT_OUTLINED),
+                icon_content=ft.Icon(ft.Icons.VIEW_COMFY_ALT),
+                selected_icon_content=ft.Icon(ft.Icons.VIEW_COMFY_ALT_OUTLINED),
                 label='Witnesses',
                 padding=ft.padding.all(10),
             ),
             ft.NavigationRailDestination(
-                icon=ft.icons.SETTINGS_OUTLINED,
-                selected_icon_content=ft.Icon(ft.icons.SETTINGS),
+                icon=ft.Icons.SETTINGS_OUTLINED,
+                selected_icon_content=ft.Icon(ft.Icons.SETTINGS),
                 label_content=ft.Text('Settings'),
                 padding=ft.padding.all(10),
             ),
@@ -48,8 +48,8 @@ class Navbar(ft.Stack):
             expand=True,
         )
 
-    def build(self):
-        return self.rail
+    def did_mount(self):
+        self.controls = [self.rail]
 
     async def nav_change(self, e):
         index = e if (type(e) is int) else e.control.selected_index
@@ -63,4 +63,4 @@ class Navbar(ft.Stack):
         elif index == self.SETTINGS:
             self.page.route = '/settings'
 
-        await self.page.update_async()
+        self.page.update()

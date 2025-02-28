@@ -31,16 +31,12 @@ class CreateContactPanel(ContactBase):
             )
 
             async def copy(e):
-                await self.app.page.set_clipboard_async(e.control.data)
+                self.app.page.set_clipboard(e.control.data)
+                self.app.snack('OOBI URL Copied!', duration=2000)
 
-                self.page.snack_bar = ft.SnackBar(ft.Text('OOBI URL Copied!'), duration=2000)
+            self.oobi_copy = ft.IconButton(icon=ft.Icons.COPY_ROUNDED, data=o, on_click=copy)
 
-                self.page.snack_bar.open = True
-                await self.page.update_async()
-
-            self.oobi_copy = ft.IconButton(icon=ft.icons.COPY_ROUNDED, data=o, on_click=copy)
-
-        self.verified = ft.Icon(ft.icons.SHIELD_OUTLINED, size=32, color=Colouring.get(Colouring.RED))
+        self.verified = ft.Icon(ft.Icons.SHIELD_OUTLINED, size=32, color=Colouring.get(Colouring.RED))
         super(CreateContactPanel, self).__init__(app=app, panel=self.panel())
 
     def generate_oobi(self, e):
@@ -63,10 +59,10 @@ class CreateContactPanel(ContactBase):
 
     async def create_contact(self, e):
         if self.alias.value == '' or self.oobi.value == '':
-            await self.app.snack('Missing required field')
+            self.app.snack('Missing required field')
             return
 
-        await self.app.snack(f'Creating contact {self.alias.value}...')
+        self.app.snack(f'Creating contact {self.alias.value}...')
 
     def load_witnesses(self):
         return [ft.dropdown.Option(wit['id']) for wit in self.app.witnesses]
@@ -74,7 +70,7 @@ class CreateContactPanel(ContactBase):
     async def callback(self, result):
         logger.info('callback: %s', result)
         self.app.page.route = '/contacts'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     async def error_callback(self, result):
         pass

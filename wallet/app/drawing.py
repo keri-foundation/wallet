@@ -36,26 +36,26 @@ class AgentDrawer(ft.NavigationDrawer):
             logger.info(f'found agent {agent}')
             agents.append(
                 ft.NavigationDrawerDestination(
-                    icon_content=ft.Icon(ft.icons.IRON),
+                    icon_content=ft.Icon(ft.Icons.IRON),
                     label=agent,
                 )
             )
         self.controls = [
             ft.Container(height=12),
             ft.Container(
-                content=ft.Row(controls=[ft.Container(width=16), ft.Icon(ft.icons.WALLET_ROUNDED), ft.Text('Wallets')]),
+                content=ft.Row(controls=[ft.Container(width=16), ft.Icon(ft.Icons.WALLET_ROUNDED), ft.Text('Wallets')]),
                 height=64,
             ),
             ft.Divider(thickness=2),
             ft.NavigationDrawerDestination(
-                icon_content=ft.Icon(ft.icons.ADD_ROUNDED),
+                icon_content=ft.Icon(ft.Icons.ADD_ROUNDED),
                 label='Initialize new wallet',
             ),
             *agents,
         ]
 
     async def drawer_dismiss(self, _):
-        await self.update_async()
+        self.update()
 
     async def close_existing_agent(self):
         closed = await close_agent_task(self.app.agent_task, self.app.agent_shutdown_event)
@@ -63,22 +63,22 @@ class AgentDrawer(ft.NavigationDrawer):
         if closed:
             self.page.title = self.app.name
             self.page.route = '/'
-            await self.page.update_async()
-            await self.app.snack(f'Closed connection to {self.app.hby.name}')
+            self.page.update()
+            self.app.snack(f'Closed connection to {self.app.hby.name}')
             logger.info(f'Closed agent {self.app.hby.name}')
 
     @log_errors
     async def agent_change(self, e):
-        await self.page.close_end_drawer_async()
+        self.page.close(self.page.end_drawer)
         selected = e.control.controls[e.control.selected_index + 3]
 
         if selected.label == 'Initialize new wallet':
             self.page.dialog = self.agent_init
-            await self.agent_init.open_init(None)
+            self.page.open(self.page.dialog)
         elif hasattr(self.page, 'hby_name') and self.page.hby_name == selected.label:
             # already connected to this agent
-            await self.app.snack(f'Already connected to {selected.label}')
+            self.app.snack(f'Already connected to {selected.label}')
         else:  # Is different agent. Close existing and connect to new
             await self.close_existing_agent()
             self.page.dialog = agenting.AgentConnection(self.app, self.page, self.config, selected.label)
-            await self.page.dialog.open_connect(None)
+            self.page.open(self.page.dialog)

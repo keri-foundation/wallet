@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=75.8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "wallet"
-version = "0.1.2"
+version = "0.2.0"
 description = "Wallet application the KERI Foundation"
 authors = [
     { name = "Kevin Griffin", email = "griffin.kev@gmail.com" },
@@ -9,15 +13,15 @@ authors = [
 ]
 readme = "README.md"
 keywords = ["GLEIF", "GAR", "cryptography", "KERI", "ACDC"]
-requires-python = ">=3.11.6"
+requires-python = ">=3.12.8"
 dependencies = [
     "dataclasses-json==0.6.7",
-    "flet==0.24.1",
-    "cit-hio==0.6.14",
-    "cit-keri==1.1.22rc1",
+    "flet[all]==0.27.1",
+    "hio==0.6.14",
+    "cit-keri==1.2.4-rc1",
     "mnemonic==0.21",
     "multicommand==1.0.0",
-    "pillow==11.0.0",
+    "pillow==11.1.0",
     "toml==0.10.2",
     "qrcode[pil]==7.4.2",
     "uvloop==0.21.0",
@@ -27,9 +31,12 @@ dependencies = [
 homepage = "https://github.com/keri-foundation/wallet"
 repository = "https://github.com/keri-foundation/wallet"
 
+[tool.setuptools]
+packages = ["wallet", "vendor"]
+
 [tool.uv]
 prerelease = "allow"
 dev-dependencies = [
-    "ruff>=0.6.9"
+    "ruff>=0.9.7"
 ]
 

@@ -344,7 +344,7 @@ class KELStateUpdater(doing.DoDoer):
             await identifiers.refresh_identifiers()
             await self.app.page.dialog.close_confirm()
             self.app.page.dialog = None
-            await self.app.page.update_async()
+            self.app.page.update()
 
     def updateDo(self, tymth, tock=0.0, **opts):
         # enter context

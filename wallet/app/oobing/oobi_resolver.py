@@ -49,7 +49,7 @@ class OobiResolver(Component):
         async def txt_alias_focus(e):
             del e
             self.txt_alias.border_color = None
-            await self.app.page.update_async()
+            self.app.page.update()
 
         self.txt_alias = ft.TextField(label='Alias', width=400, on_change=txt_alias_change, on_focus=txt_alias_focus)
 
@@ -59,7 +59,7 @@ class OobiResolver(Component):
         async def txt_oobi_focus(e):
             del e
             self.txt_oobi.border_color = None
-            await self.app.page.update_async()
+            self.app.page.update()
 
         self.txt_oobi = ft.TextField(label='OOBI', width=400, on_change=txt_oobi_change, on_focus=txt_oobi_focus)
 
@@ -79,13 +79,13 @@ class OobiResolver(Component):
             self.txt_oobi.border_color = Colouring.get(Colouring.RED)
 
         if valid:
-            await self.app.snack(f'Resolving {self.alias}...')
+            self.app.snack(f'Resolving {self.alias}...')
             if await self.svc.resolve_oobi(oobi=self.oobi, alias=self.alias):
                 await self.on_service_success()
             else:
                 await self.on_service_fail()
         else:
-            await self.app.snack(
+            self.app.snack(
                 f'Missing field{"s"[: len(failed_on) ^ 1]}: {", ".join(failed_on[:])}',
             )
 
@@ -115,7 +115,7 @@ class OobiResolver(Component):
 
     @log_errors
     async def on_service_success(self):
-        await self.app.snack(f'{self.alias} resolved')
+        self.app.snack(f'{self.alias} resolved')
         self.reset()
         if self.callback is not None:
             if inspect.iscoroutinefunction(self.callback):
@@ -125,7 +125,7 @@ class OobiResolver(Component):
 
     @log_errors
     async def on_service_fail(self):
-        await self.app.snack('Failed to resolve OOBI')
+        self.app.snack('Failed to resolve OOBI')
         if self.err_cb is not None:
             if inspect.iscoroutinefunction(self.err_cb):
                 await self.err_cb(True)
@@ -137,7 +137,7 @@ class OobiResolver(Component):
         del e
         self.reset()
         self.app.page.route = '/contacts'
-        await self.app.page.update_async()
+        self.app.page.update()
 
     def reset(self):
         self.txt_alias.value = ''
