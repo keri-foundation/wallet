@@ -68,11 +68,138 @@ ALLOWED_METHODS = {
     "kf.account.witnesses.list",
     "kf.account.watchers.list",
     "kf.account.watchers.status",
+    "kf.account.watchers.query",
+    "kf.services.overview",
 }
+
+# --- Test-only OOBI parser gate (never enabled in production config) ---
+# The OOBI browser no-network regression drives Parser.parse inside the real
+# worker through this reserved method. It is registered ONLY when the PyScript
+# runtime config carries `fort_oobi_test: true` (see pyscript-oobi-test.toml).
+# Normal production config leaves it rejected by the allowlist below.
+TEST_OOBI_METHOD = "__test.oobi.parse"
+# Test-only reopen-persistence probe (Phase 8). Also marker-gated so normal
+# production config keeps rejecting it.
+TEST_P8_METHOD = "__test.oobi.p8"
+OOBI_TEST_MARKER_PATHS = ("./oobi-test-marker.txt", "/oobi-test-marker.txt")
+
+
+# The reserved __test.oobi.parse method is gated DYNAMICALLY at request time.
+# Arbitrary TOML keys do NOT reach the worker's python pyscript.config (only
+# PyScript-known schema keys are forwarded), so the test-only pyscript-oobi-test
+# TOML carries the flag by copying app/oobi-test-marker.txt into the worker
+# virtual FS via the honored [files] mapping. Production configs never copy the
+# marker, so the method stays rejected there.
+def _test_oobi_enabled() -> bool:
+    try:
+        if bool(_config_dict().get("fort_oobi_test", False)):
+            return True
+    except Exception:
+        pass
+    try:
+        # [files] copies land in the same directory as the runtime modules
+        # (vaulting.py is importable there), so locate that directory and check
+        # for the test-only marker next to it.
+        import os
+
+        import vaulting as _vaulting_mod
+
+        marker_candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(_vaulting_mod.__file__)), "oobi-test-marker.txt"),
+            *OOBI_TEST_MARKER_PATHS,
+        ]
+        for marker_path in marker_candidates:
+            try:
+                with open(marker_path, "r", encoding="utf-8") as marker_file:
+                    if "fort_oobi_test=true" in marker_file.read():
+                        return True
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+EXPECTED_OOBI_FIXTURE_SHA = "48fcc323fc2f7956ecd81d2ced766dc09caecc25c9d79ebdc96bb17642a95453"
+OOBI_FIXTURE_WITNESS_AID = "BIWLbdRiC1X2ylzDl-blkqkXKz7LI-1ErzbjokYVlk9Z"
+OOBI_FIXTURE_HTTPS_URL = "https://138.68.53.132:5633"
+# Deterministic V2 controller-OOBI fixtures the no-network regression can feed the
+# real worker. Keyed by SHA256; the handler only accepts fixtures in this registry.
+#   witness: https://138.68.53.132:5633 (EID BIWLbdRi...)
+#   watcher: https://138.68.53.132:7633 (EID BBYFnq8-...)
+OOBI_FIXTURES = {
+    EXPECTED_OOBI_FIXTURE_SHA: {
+        "label": "witness",
+        "aid": OOBI_FIXTURE_WITNESS_AID,
+        "url": OOBI_FIXTURE_HTTPS_URL,
+    },
+    "6565f493cb65f21abc965dc5b8b5f065de5a1169b2f00453183b7633212f2e1a": {
+        "label": "watcher",
+        "aid": "BBYFnq8-_i2hjGemEsUMdE6M4RAB9Bi3iY7dvfEGKV2O",
+        "url": "https://138.68.53.132:7633",
+    },
+}
+# Deterministic genuine-V1 controller-OOBI fixture (KERI10 JSON, produced with
+# f4b9 tooling at version=Vrsn_1_0). Fort Web hosted integration is V2-only, so
+# this fixture MUST be rejected at the hosted boundary with UNSUPPORTED_KERI_VERSION.
+V1_OOBI_FIXTURE_SHA = "6f6a86bb63ce5a15bcb2bced2020ea821cecd29a596a40b711efa38c9e5a0b61"
+UNSUPPORTED_KERI_VERSION = "UNSUPPORTED_KERI_VERSION"
+
+
+def _require_hosted_v2(body: bytes) -> int:
+    """V2-only hosted-boundary guard.
+
+    Fort Web hosted KERI integration is V2-only (the f4b9 stack emits CESR V2 and
+    explicitly refuses V1 CESR). Before a hosted OOBI body is allowed to touch the
+    parser/keystore, read the first KERI event's protocol version with keri's own
+    version machinery and reject anything whose major version is not 2.
+
+    Returns the version major on success; raises RuntimeFault(UNSUPPORTED_KERI_VERSION)
+    when the stream is not V2. This is bounded and never touches keystore state, so a
+    rejected stream can never mark an OOBI resolved or insert trusted loc/role/kever.
+    """
+    import json
+
+    from keri.core import coring
+    from keri.kering import Colds, deversify, sniff
+
+    ims = bytearray(body)
+    if not ims:
+        raise RuntimeFault(UNSUPPORTED_KERI_VERSION, "Hosted OOBI response was empty.")
+    cold = sniff(ims)
+    if cold in (Colds.msg,):
+        # JSON/CBOR/MGPK message. Fort Web only accepts V2; read the first event's
+        # "v" version string via a real JSON decode (not a regex), then deversify.
+        stripped = bytes(ims).lstrip()
+        if not stripped.startswith(b"{"):
+            # Non-JSON serialized message (CBOR/MGPK) is not a supported hosted body.
+            raise RuntimeFault(UNSUPPORTED_KERI_VERSION, "Hosted OOBI body is not a supported V2 CESR/JSON stream.")
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(stripped.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 - any malformed body is unsupported
+            raise RuntimeFault(UNSUPPORTED_KERI_VERSION, "Hosted OOBI body is not valid JSON.") from exc
+        vs = obj.get("v") if isinstance(obj, dict) else None
+        if not isinstance(vs, str):
+            raise RuntimeFault(UNSUPPORTED_KERI_VERSION, "Hosted OOBI body has no KERI version string.")
+        try:
+            _, pvrsn, _, _, _ = deversify(vs)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeFault(UNSUPPORTED_KERI_VERSION, "Hosted OOBI body has an unreadable KERI version.") from exc
+        major = getattr(pvrsn, "major", None)
+        if major != 2:
+            raise RuntimeFault(UNSUPPORTED_KERI_VERSION, f"Hosted OOBI protocol major={major}; Fort Web is V2-only.")
+        return major
+    # CESR counter stream: f4b9 emits CESR V2 only, so a CESR body is V2.
+    return 2
 DEFAULT_KF_BOOT_URL = "http://127.0.0.1:9723"
 KF_STATE_KEY = "state"
 KF_STATE_SUBDB = "kfst."
 KF_PROXY_PREFIX = "/_fortweb_proxy"
+# Only loopback/local dev endpoints are routed through the same-origin dev
+# proxy. External/public http(s) endpoints are fetched directly by the browser.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 KF_ONBOARDING_AUTH_NAMESPACE = "kf_onboarding"
 KF_ONBOARDING_AUTH_ALIAS_PREFIX = "kf-onboarding"
 KF_BOOTSTRAP_TIMEOUT_MS = 15_000
@@ -1048,6 +1175,12 @@ def _proxy_url(url: str):
     if parsed.scheme == same_origin.scheme and parsed.netloc == same_origin.netloc:
         return url
 
+    host = (parsed.hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        # External/public endpoint: the browser fetches it directly. Only
+        # loopback/local dev endpoints need the same-origin dev proxy.
+        return url
+
     path = parsed.path or "/"
     proxied = f"{origin}{KF_PROXY_PREFIX}/{parsed.scheme}/{parsed.netloc}{path}"
     if parsed.query:
@@ -1275,13 +1408,16 @@ async def _send_kf_exn(
     expected_sender: str = "",
 ):
     modules = _load_modules()
-    serder, end = modules["exchanging"].exchange(
+    # f4b9 exposing exchangeOld (V2 default); historical module-level `exchange`
+    # was removed. Kept consistent with the live transporting.send_kf_exn path.
+    serder = modules["exchanging"].exchangeOld(
         route=route,
-        payload=payload,
+        attributes=payload,
         sender=hab.pre,
-        recipient=destination or None,
+        receiver=destination or "",
     )
-    ims = hab.endorse(serder=serder, last=False, pipelined=False)
+    end = bytearray()
+    ims = hab.endorse(serder=serder, last=False)
     attachment = bytearray(ims)
     del attachment[:serder.size]
     if end:
@@ -1882,7 +2018,7 @@ async def _run_kf_onboarding(hby, organizer, *, boot_url: str, alias: str, witne
         transferable=False,
     ) as (_temp_hby, ephemeral_hab):
         try:
-            await _send_kf_event(snapshot["surfaces"]["onboardingUrl"], ephemeral_hab.makeOwnInception())
+            await _send_kf_event(snapshot["surfaces"]["onboardingUrl"], ephemeral_hab.msgOwnInception())
             start_reply = await _send_kf_exn(
                 hby,
                 ephemeral_hab,
@@ -1899,6 +2035,14 @@ async def _run_kf_onboarding(hby, organizer, *, boot_url: str, alias: str, witne
             boot_server_aid = start_reply["sender"] or boot_server_aid
 
             start_payload = start_reply["payload"]
+            try:
+                js.console.log(
+                    "[worker] [ob] session/start reply account_aid="
+                    + str(start_payload.get("account_aid", "") or "")
+                    + " toad=" + str(start_payload.get("toad", "") or "")
+                )
+            except Exception:
+                pass
             for entry in start_payload.get("witnesses", []):
                 if not isinstance(entry, dict):
                     continue
@@ -1938,8 +2082,22 @@ async def _run_kf_onboarding(hby, organizer, *, boot_url: str, alias: str, witne
                 witness_eids=[witness["eid"] for witness in witness_rows],
                 toad=int(start_payload.get("toad", 0) or option["toad"]),
             )
+            try:
+                js.console.log(
+                    "[worker] [ob] account_hab.pre=" + str(account_hab.pre or "") + " requested_account_aid=" + str(account_aid or "").strip()
+                )
+            except Exception:
+                pass
 
             for witness in witness_rows:
+                try:
+                    js.console.log(
+                        "[worker] [ob] register-with-witness dest="
+                        + str(witness.get("eid", "") or "")
+                        + " url=" + str(witness.get("witnessUrl", "") or "")
+                    )
+                except Exception:
+                    pass
                 registration = await _register_with_witness(account_hab, witness)
                 witness["oobi"] = registration["oobi"] or witness["oobi"]
                 resolved_remote_ids.append(
@@ -2457,7 +2615,425 @@ onboarding.configure_runtime(
 )
 
 
+async def _test_oobi_parse(params: dict):
+    """Level-gated no-network OOBI experiments inside the real worker.
+
+    All levels decode/verify the deterministic witness-controller fixture and run
+    against the currently-open vault's browser-backed KERI DB (WebBaser/WebKeeper/
+    IndexedDB), with no hosted network.
+
+      level=1: bare Parser (Vrsn_2_0) on the fixture bytes.
+      level=2: stock Oobiery.parser — the wheel's Oobiery builds its own
+               version-aware Parser from the Habery version (V2 on the new
+               f4b9-aligned wheel).
+      level=3: stock Oobiery.processClients with a completed 200 application/cesr
+               response (smallest fake client) on pending coobi state.
+
+    Only reachable when _test_oobi_enabled() (test marker/config present).
+    """
+    import hashlib
+    from collections import deque
+
+    level = int(params.get("level", 1) or 1)
+
+    state = vaulting.require_open_state()
+    hby = state["hby"]
+    modules = _load_modules()
+    oobiing = modules["oobiing"]
+    recording = modules["recording"]
+
+    # L4: REAL BrowserClienter path (the original production regression).
+    # Stock Oobiery requests the deterministic fixture from the localhost test
+    # endpoint (a real js.fetch through the browser httping clienter), then
+    # processFlows -> processClients parse it into verified state. No injected
+    # fake response; transport is localhost-only for determinism.
+    if int(params.get("level", 1) or 1) == 4:
+        from urllib.parse import urlparse
+        import re as _re
+        import time as _time
+
+        url = str(params.get("oobiUrl") or "").strip()
+        if not url:
+            raise RuntimeFault("BAD_REQUEST", "level 4 requires oobiUrl (localhost deterministic endpoint).")
+        host = (urlparse(url).hostname or "").lower()
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            raise RuntimeFault("BAD_REQUEST", "level 4 oobiUrl must be localhost (no-network deterministic test).")
+        match = _re.fullmatch(r"/oobi/([^/]+)/([^/]+)", urlparse(url).path or "")
+        if not match:
+            raise RuntimeFault("BAD_REQUEST", "level 4 oobiUrl must be /oobi/<cid>/<role>.")
+        l4_aid = match.group(1)
+        cid_def = next((d for d in OOBI_FIXTURES.values() if d["aid"] == l4_aid), None)
+        if cid_def is None:
+            raise RuntimeFault("BAD_REQUEST", "level 4 oobiUrl cid is not a registered deterministic fixture.")
+        from keri.kering import Roles, Schemes  # noqa: PLC0415
+
+        oobiery = oobiing.Oobiery(hby=hby)
+        obr = recording.OobiRecord(date=oobiing.nowIso8601())
+        obr.cid = l4_aid
+        hby.db.oobis.pin(keys=(url,), val=obr)
+        t0 = _time.monotonic()
+        js.console.log("[worker] OOBI_L4_AWAIT_RESOLUTION_ENTER")
+        try:
+            roob = await _await_resolution(hby, oobiery, url)
+        except RuntimeFault:
+            raise
+        finally:
+            js.console.log(f"[worker] OOBI_L4_AWAIT_RESOLUTION_EXIT {(_time.monotonic() - t0) * 1000:.0f}ms")
+        ender = hby.db.ends.get(keys=(l4_aid, Roles.controller, l4_aid))
+        locer = hby.db.locs.get(keys=(l4_aid, Schemes.https))
+        kever_mem = hby.kevers.get(l4_aid) if hasattr(hby, "kevers") else None
+        kevers_ref = getattr(getattr(hby, "db", None), "kevers", None)
+        kever_by_pre = kevers_ref.get(l4_aid) if isinstance(kevers_ref, dict) else None
+        keystore_size = len(kevers_ref) if isinstance(kevers_ref, dict) else -1
+        js.console.log("[worker] OOBI_L4_DONE")
+        return {
+            "level": 4,
+            "result": "PASS",
+            "l4": "real_browserclienter",
+            "roobi_state": str(getattr(roob, "state", "") or ""),
+            "roobi_present": roob is not None,
+            "http_complete": True,
+            "processclients_returned": True,
+            "keystate": kever_mem is not None or kever_by_pre is not None,
+            "keystore_size": keystore_size,
+            "loc_url": locer.url if locer is not None else None,
+            "controller_role": bool(ender is not None and ender.allowed),
+            "expected_loc": cid_def["url"],
+            "target": cid_def["label"],
+            "habery_version_major": getattr(getattr(hby, "version", None), "major", None),
+        }
+
+    raw_b64 = params.get("fixtureBase64") or params.get("fixture_b64") or ""
+    expected_sha = str(params.get("expectedSha") or params.get("expected_sha") or "")
+    try:
+        fixture = base64.b64decode(raw_b64)
+    except Exception as exc:
+        raise RuntimeFault("BAD_REQUEST", f"fixtureBase64 is not valid base64: {exc}") from exc
+    actual_sha = hashlib.sha256(fixture).hexdigest()
+    if actual_sha != expected_sha:
+        raise RuntimeFault("BAD_REQUEST", f"fixture SHA mismatch (got {actual_sha}, want {expected_sha}).")
+
+    # V1-unsupported policy: a genuine V1 hosted stream must be rejected fast by
+    # the V2-only hosted-boundary guard — never hang, never resolve, never touch
+    # keystore/trusted state. This probe returns PASS only if the guard rejects.
+    if actual_sha == V1_OOBI_FIXTURE_SHA:
+        import time as _time
+
+        t0 = _time.monotonic()
+        try:
+            _require_hosted_v2(fixture)
+        except RuntimeFault as exc:
+            bounded_ms = int((_time.monotonic() - t0) * 1000)
+            return {
+                "level": int(level),
+                "result": "PASS",
+                "policy": "reject_v1",
+                "error_code": exc.code,
+                "accepted": False,
+                "duration_ms": bounded_ms,
+                "target": "v1-negative",
+            }
+        return {
+            "level": int(level),
+            "result": "FAIL",
+            "policy": "reject_v1",
+            "accepted": True,
+            "error": "V1 stream was not rejected by the V2-only boundary guard.",
+        }
+
+    fixture_def = OOBI_FIXTURES.get(actual_sha)
+    if fixture_def is None:
+        raise RuntimeFault("BAD_REQUEST", "fixture SHA is not a registered deterministic OOBI fixture.")
+
+    # Every accepted hosted fixture must itself pass the V2-only boundary guard.
+    try:
+        _require_hosted_v2(fixture)
+    except RuntimeFault as exc:
+        raise RuntimeFault(UNSUPPORTED_KERI_VERSION, f"Hosted fixture rejected: {exc}") from exc
+
+    wit = fixture_def["aid"]
+    target_label = fixture_def["label"]
+    target_url = fixture_def["url"]
+    from keri.kering import Roles, Schemes  # noqa: PLC0415
+
+    def state_snapshot(parser=None) -> dict:
+        ender = hby.db.ends.get(keys=(wit, Roles.controller, wit))
+        locer = hby.db.locs.get(keys=(wit, Schemes.https))
+        # Kevery stores remote kevers at db.kevers[pre] (WebBaser keeps this as an
+        # in-memory dict keyed by pre string, unlike a .get(keys=(...)) store).
+        kever_mem = hby.kevers.get(wit) if hasattr(hby, "kevers") else None
+        kevers_ref = getattr(getattr(hby, "db", None), "kevers", None)
+        kevers_kind = type(kevers_ref).__name__ if kevers_ref is not None else None
+        kever_by_pre = None
+        if isinstance(kevers_ref, dict):
+            kever_by_pre = kevers_ref.get(wit)
+        elif kevers_ref is not None:
+            try:
+                kever_by_pre = kevers_ref.get(keys=(wit,))
+            except Exception:
+                kever_by_pre = None
+        keystore_size = len(kevers_ref) if isinstance(kevers_ref, dict) else -1
+        hby_ver = getattr(hby, "version", None)
+        parser_ver = getattr(parser, "version", None) if parser is not None else None
+        return {
+            "target": target_label,
+            "keystate": kever_mem is not None or kever_by_pre is not None,
+            "keystate_mem": kever_mem is not None,
+            "keystate_db": kever_by_pre is not None,
+            "kevers_kind": kevers_kind,
+            "keystore_size": keystore_size,
+            "loc_url": locer.url if locer is not None else None,
+            "controller_role": bool(ender is not None and ender.allowed),
+            "expected_loc": target_url,
+            # V2-only runtime invariants (Fort Web hosted integration is V2-only).
+            "habery_version_major": getattr(hby_ver, "major", None),
+            "parser_version_major": getattr(parser_ver, "major", None),
+        }
+
+    if level == 1:
+        from keri.core import Parser, Router, Revery, Kevery  # noqa: PLC0415
+        from keri.kering import Vrsn_2_0  # noqa: PLC0415
+
+        rtr = Router()
+        rvy = Revery(db=hby.db, rtr=rtr)
+        # NOTE: this wheel's Kevery (keri/core/eventing.py) takes no `cf` argument,
+        # unlike the newer native f4b9e3e keripy. Match the loaded wheel's signature.
+        kvy = Kevery(db=hby.db, lax=False, local=False, rvy=rvy)
+        kvy.registerReplyRoutes(router=rtr)
+        prs = Parser(framed=True, kvy=kvy, rvy=rvy, version=Vrsn_2_0)
+        js.console.log("[worker] OOBI_L1_PARSE_ENTER")
+        prs.parse(ims=bytearray(fixture))  # drains its input bytearray
+        js.console.log("[worker] OOBI_L1_PARSE_EXIT")
+        return {"level": 1, "result": "PASS", **state_snapshot(prs)}
+
+    if level == 2:
+        try:
+            oobiery = oobiing.Oobiery(hby=hby)
+        except Exception as exc:
+            raise RuntimeFault("RUNTIME_ERROR", f"Oobiery construction failed: {exc}") from exc
+        js.console.log("[worker] OOBI_L2_ENTER")
+        try:
+            oobiery.parser.parse(ims=bytearray(fixture))
+        except Exception as exc:
+            raise RuntimeFault("RUNTIME_ERROR", f"OOBI_L2 parser.parse failed: {exc}") from exc
+        js.console.log("[worker] OOBI_L2_EXIT")
+        return {"level": 2, "result": "PASS", **state_snapshot(oobiery.parser)}
+
+    if level == 3:
+        try:
+            oobiery = oobiing.Oobiery(hby=hby)
+        except Exception as exc:
+            raise RuntimeFault("RUNTIME_ERROR", f"Oobiery construction failed: {exc}") from exc
+        url = str(params.get("oobiUrl") or f"{target_url}/oobi/{wit}/controller").strip()
+        obr = recording.OobiRecord(date=oobiing.nowIso8601())
+        obr.cid = wit
+        js.console.log("[worker] OOBI_L3_ENTER")
+        # Normal pending-OOBI state exactly as Oobiery.request() leaves it:
+        # a coobi row + a client in self.clients awaiting a completed response.
+        hby.db.coobi.pin(keys=(url,), val=obr)
+        fake_client = SimpleNamespace(
+            url=url,
+            responses=deque(
+                [
+                    {
+                        "status": 200,
+                        "headers": {"Content-Type": oobiing.CESR_CONTENT_TYPE},
+                        "body": fixture,
+                    }
+                ]
+            ),
+        )
+        oobiery.clients[url] = fake_client
+        js.console.log("[worker] OOBI_L3_BEFORE_PROCESSCLIENTS")
+        try:
+            oobiery.processClients()
+        except Exception as exc:
+            raise RuntimeFault("RUNTIME_ERROR", f"OOBI_L3 processClients failed: {exc}") from exc
+        js.console.log("[worker] OOBI_L3_AFTER_PROCESSCLIENTS")
+        roob = hby.db.roobi.get(keys=(url,))
+        still_coobi = hby.db.coobi.get(keys=(url,)) is not None
+        # f4b9 processClients removes the client from its clienter/doer registry
+        # (not from Oobiery.clients), then clears coobi and records roobi=resolved.
+        # The durable product signals are: coobi cleared + roobi resolved + kever.
+        js.console.log("[worker] OOBI_L3_EXIT")
+        return {
+            "level": 3,
+            "result": "PASS",
+            "roobi_state": str(getattr(roob, "state", "") or ""),
+            "roobi_present": roob is not None,
+            "coobi_still_pending": still_coobi,
+            "client_handled": roob is not None and not still_coobi,
+            **state_snapshot(oobiery.parser),
+        }
+
+    raise RuntimeFault("BAD_REQUEST", f"Unsupported __test.oobi.parse level: {level}.")
+
+
+async def _test_oobi_p8(params: dict):
+    """Test-only reopen-persistence probe (Phase 8).
+
+    Read-only KERI state queries against the currently-open vault's browser DB.
+    All reads go through the normal KERI stores (kels/states/locs/ends/roobi)
+    plus the f4b9 `db.kevers` statedict whose read-through cache rebuilds a
+    remote Kever from the persisted key-state record on `__contains__`/item
+    access (NOT on `.get()`).
+
+      cmd=last_close : last product close_state outcome (no open state needed).
+      cmd=identities : local identifier records (account identity persistence).
+      cmd=oobi_counts : persisted OOBI tracking counts (nothing re-resolved).
+      cmd=inspect    : per-AID persisted + reconstructed state snapshot. Given
+                       {aid, url?}, reports persisted KEL/state/loc/end/roobi,
+                       whether the kever was already cached in memory, whether it
+                       reconstructs via read-through, and a usable key-state
+                       summary when it does.
+
+    Only reachable when _test_oobi_enabled() (test marker/config present).
+    """
+    cmd = str(params.get("cmd") or "").strip()
+    modules = _load_modules()
+
+    if cmd == "last_close":
+        return {
+            "cmd": cmd,
+            "last_close": getattr(vaulting, "_LAST_CLOSE", None),
+        }
+
+    state = vaulting.require_open_state()
+    hby = state["hby"]
+    from keri.kering import Roles, Schemes  # noqa: PLC0415
+
+    if cmd == "identities":
+        return {
+            "cmd": cmd,
+            "identifiers": [
+                {"aid": rec["aid"], "alias": rec["alias"]}
+                for rec in vaulting._list_identifier_records(hby)
+            ],
+        }
+
+    if cmd == "oobi_counts":
+        db = hby.db
+
+        def _count(store):
+            count = 0
+            try:
+                for _ in store.getTopItemIter():
+                    count += 1
+                    if count > 5000:
+                        break
+            except Exception:
+                return -1
+            return count
+
+        return {
+            "cmd": cmd,
+            "coobi": _count(db.coobi),
+            "oobis": _count(db.oobis),
+            "roobi": _count(db.roobi),
+            "esrs_local": None,
+        }
+
+    if cmd == "inspect":
+        aid = str(params.get("aid") or "").strip()
+        url = str(params.get("url") or "").strip()
+        if not aid:
+            raise RuntimeFault("BAD_REQUEST", "cmd=inspect requires aid.")
+        db = hby.db
+        target_label = next((d["label"] for d in OOBI_FIXTURES.values() if d["aid"] == aid), None)
+        ender = db.ends.get(keys=(aid, Roles.controller, aid))
+        locer = db.locs.get(keys=(aid, Schemes.https))
+
+        kel_last = None
+        try:
+            kel_last = db.kels.getLast(keys=aid, on=0)
+        except Exception:
+            kel_last = None
+
+        ksr = None
+        try:
+            ksr = db.states.get(keys=aid)
+        except Exception:
+            ksr = None
+
+        # In-memory-only check first (.get does NOT read through).
+        cached_hit = False
+        try:
+            cached_hit = db.kevers.get(aid) is not None
+        except Exception:
+            cached_hit = False
+
+        # Read-through reconstruction (__contains__ / __getitem__ do read through).
+        reconstructed = False
+        kever = None
+        try:
+            reconstructed = aid in db.kevers
+            if reconstructed:
+                kever = db.kevers[aid]
+        except Exception:
+            reconstructed = False
+            kever = None
+
+        kstate = None
+        usable = False
+        if kever is not None:
+            def _ksget(ks, key):
+                # KeyStateRecord supports attribute access; tolerate both shapes.
+                try:
+                    value = ks.get(key)
+                    if value is not None:
+                        return value
+                except Exception:  # noqa: BLE001 - attribute-based record
+                    pass
+                return getattr(ks, key, None)
+
+            try:
+                ks = kever.state()
+                state_keys = _ksget(ks, "k")
+                usable = bool(state_keys)
+                kstate = {
+                    "sn": getattr(kever, "sn", None),
+                    "est": bool(getattr(kever, "est", None)),
+                    "transferable": bool(getattr(kever, "transferable", None)),
+                    "verfer_count": len(getattr(kever, "verfers", []) or []),
+                    "state_sn": _ksget(ks, "s"),
+                    "state_dig": _ksget(ks, "d"),
+                    "state_keys": state_keys,
+                }
+            except Exception as exc:  # noqa: BLE001 - diagnostic should not raise
+                kstate = {"error": str(exc)[:160]}
+
+        roobi_state = None
+        if url:
+            try:
+                ro = db.roobi.get(keys=(url,))
+                roobi_state = str(getattr(ro, "state", "") or "") or None
+            except Exception:
+                roobi_state = None
+
+        return {
+            "cmd": cmd,
+            "aid": aid,
+            "target": target_label,
+            "persisted_kel": kel_last is not None,
+            "persisted_state": ksr is not None,
+            "loc_url": locer.url if locer is not None else None,
+            "controller_role": bool(ender is not None and ender.allowed),
+            "roobi_state": roobi_state,
+            "kever_cached_in_memory": cached_hit,
+            "kever_reconstructed": reconstructed,
+            "kever_usable": usable,
+            "kever": kstate,
+            "habery_version_major": getattr(getattr(hby, "version", None), "major", None),
+        }
+
+    raise RuntimeFault("BAD_REQUEST", f"Unsupported __test.oobi.p8 cmd: {cmd}.")
+
+
 async def _dispatch(method: str, params: dict):
+    if _test_oobi_enabled() and method == TEST_OOBI_METHOD:
+        return await _test_oobi_parse(params)
+    if _test_oobi_enabled() and method == TEST_P8_METHOD:
+        return await _test_oobi_p8(params)
     if method.startswith("kf."):
         return await onboarding.dispatch(method, params)
     return await vaulting.dispatch(method, params)
@@ -2493,7 +3069,8 @@ async def handle_request(raw_message):
     method = request.get("method")
     if not isinstance(method, str) or not method:
         return _error_payload(message_id, "BAD_REQUEST", "Runtime request method was invalid.")
-    if method not in ALLOWED_METHODS:
+    test_oobi_allowed = method in (TEST_OOBI_METHOD, TEST_P8_METHOD) and _test_oobi_enabled()
+    if method not in ALLOWED_METHODS and not test_oobi_allowed:
         return _error_payload(message_id, "BAD_REQUEST", f"Runtime method '{method}' is not allowed.")
 
     params = request.get("params")

@@ -53,6 +53,40 @@ class FortWebRequestHandler(http.server.SimpleHTTPRequestHandler):
         ".json": "application/json",
     }
 
+    # Deterministic local OOBI endpoints (test-owned). Serves the same V2 CESR
+    # controller streams the DigitalOcean witness/watcher serve, from local
+    # fixture files, so the real BrowserClienter OOBI path can be exercised
+    # with zero external network during the deterministic regressions.
+    OOBI_FIXTURES = {
+        "BIWLbdRiC1X2ylzDl-blkqkXKz7LI-1ErzbjokYVlk9Z": "synth-witness-oobi.cesr",  # witness :5633
+        "BBYFnq8-_i2hjGemEsUMdE6M4RAB9Bi3iY7dvfEGKV2O": "synth-watcher-oobi.cesr",  # watcher :7633
+    }
+
+    def _serve_oobi_fixture(self) -> bool:
+        import re
+
+        match = re.fullmatch(r"/oobi/([^/]+)/([^/]+)", self.path.split("?", 1)[0])
+        if not match:
+            return False
+        cid, role = match.group(1), match.group(2)
+        fixture_name = self.OOBI_FIXTURES.get(cid)
+        if fixture_name is None:
+            self.send_error(404, f"unknown deterministic OOBI fixture for {cid}")
+            return True
+        fixture_path = os.path.join(self.directory, "fortweb", "app", "fixtures", fixture_name)
+        try:
+            with open(fixture_path, "rb") as fh:
+                body = fh.read()
+        except OSError:
+            self.send_error(404, f"fixture file missing: {fixture_path}")
+            return True
+        self.send_response(200)
+        self.send_header("Content-Type", "application/cesr")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def translate_path(self, path: str) -> str:
         # Handle vendor requests
         if path.startswith('/fortweb/vendor/'):
@@ -99,10 +133,14 @@ class FortWebRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self._redirect_root_to_app():
             return
+        if self._serve_oobi_fixture():
+            return
         super().do_GET()
 
     def do_HEAD(self) -> None:  # noqa: N802
         if self._redirect_root_to_app():
+            return
+        if self._serve_oobi_fixture():
             return
         super().do_HEAD()
 

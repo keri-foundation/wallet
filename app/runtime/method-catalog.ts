@@ -17,4 +17,6 @@ export const METHODS = Object.freeze({
     kfAccountWitnessesList: "kf.account.witnesses.list",
     kfAccountWatchersList: "kf.account.watchers.list",
     kfAccountWatchersStatus: "kf.account.watchers.status",
+    kfAccountWatchersQuery: "kf.account.watchers.query",
+    kfServicesOverview: "kf.services.overview",
 } as const);

@@ -211,10 +211,27 @@ export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContrac
                     postLog("runtime_origin_contract_forwarded", describeRuntimeOriginContract(runtimeOriginContract));
                 }
 
+                // Hand the (already local/vendored) interpreter to the PyScript
+                // worker both as the top-level `version` (the polyscript worker
+                // builds its runtime handle as `<type>@<version>` and falls back
+                // to its bundled jsdelivr default when version is absent) and as
+                // `interpreter`. The DOM-script code path in polyscript resolves
+                // interpreter/version to an absolute URL against the configURL
+                // base, so we do the same here — a relative "/fortweb/..." path
+                // alone is not enough to avoid the jsdelivr default engine.
+                const interpreterUrl =
+                    typeof config.interpreter === "string" && config.interpreter.length > 0
+                        ? (config.interpreter as string)
+                        : undefined;
+                const interpreterVersionUrl =
+                    interpreterUrl !== undefined ? new URL(interpreterUrl, configUrlString).href : undefined;
+
                 const worker = await PyWorker(workerUrlString, {
                     type: "pyodide",
                     configURL: configUrlString,
                     config,
+                    ...(interpreterUrl !== undefined ? { interpreter: interpreterUrl } : {}),
+                    ...(interpreterVersionUrl !== undefined ? { version: interpreterVersionUrl } : {}),
                 });
                 postLifecycle("ready");
                 return worker;

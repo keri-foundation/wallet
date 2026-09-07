@@ -1,0 +1,24 @@
+# Test-only PyScript runtime config for the OOBI no-network browser regression.
+#
+# Mirrors pyscript-ci.toml (real interpreter + wheel/runtime behavior) and adds
+# a test-only marker file (below) that enables the worker's reserved
+# __test.oobi.parse method. Normal production configs (pyscript-ci.toml /
+# runtime origin contract) do NOT copy this marker, so the test method stays
+# rejected by the worker allowlist.
+#
+# NOTE: arbitrary TOML keys (e.g. fort_oobi_test = true) are NOT visible to the
+# worker's python `pyscript.config` (only PyScript-known schema keys are), so
+# the flag is carried by copying a marker file into the worker virtual FS via
+# the honored [files] mapping.
+#
+# interpreter is the fully-qualified LOCAL pyodide URL (served by serve_local on
+# the dedicated test port 4183). A scheme-qualified URL makes PyScript import it
+# directly instead of falling back to the bundled jsdelivr default interpreter,
+# which keeps the real-worker experiment fully offline/deterministic.
+interpreter = "http://127.0.0.1:4183/fortweb/vendor/pyodide/0.29.3/pyodide.mjs"
+
+[files]
+"./app/runtime/vaulting.py" = "./vaulting.py"
+"./app/runtime/transporting.py" = "./transporting.py"
+"./app/runtime/onboarding.py" = "./onboarding.py"
+"./app/oobi-test-marker.txt" = "./oobi-test-marker.txt"

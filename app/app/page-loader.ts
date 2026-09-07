@@ -22,11 +22,32 @@ export interface RouteDataResult {
     identifiers?: RecordValue[];
     remote?: RecordValue;
     remotes?: RecordValue[];
+    services?: RecordValue;
     settings?: RecordValue;
     watcherError?: string;
     watchers?: RecordValue[];
     witnessError?: string;
     witnesses?: RecordValue[];
+}
+
+/** Fetch the normalized hosted-service connection view model (domain layer).
+ *
+ * Independent of Kf Boot account-management synchronization: it is derived from
+ * cryptographically proven milestones persisted during hosted onboarding, so a
+ * `/account` management 409 must never hide direct service truth.
+ */
+async function loadServicesOverview(
+    bridge: RuntimeBridgeLike,
+    vaultId: string,
+): Promise<RecordValue | undefined> {
+    try {
+        const result = await bridge.request<{ services: RecordValue }>(METHODS.kfServicesOverview, {
+            vaultId,
+        });
+        return result.services ?? {};
+    } catch {
+        return undefined;
+    }
 }
 
 export async function loadRouteData({ bridge, route }: RouteDataLoaderContext): Promise<RouteDataResult> {
@@ -93,6 +114,7 @@ export async function loadRouteData({ bridge, route }: RouteDataLoaderContext): 
             bootstrapState,
             witnesses,
             witnessError,
+            services: await loadServicesOverview(bridge, vaultId),
         };
     }
 
@@ -115,6 +137,7 @@ export async function loadRouteData({ bridge, route }: RouteDataLoaderContext): 
             bootstrapState,
             watchers,
             watcherError,
+            services: await loadServicesOverview(bridge, vaultId),
         };
     }
 

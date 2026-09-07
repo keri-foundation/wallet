@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FortWeb OOBI real-worker drive</title>
+</head>
+<body>
+    <h1>OOBI real-worker drive</h1>
+    <!-- Register the LOCAL vendored pyodide as the page default so PyScript
+         core's eager default-interpreter preload never reaches the jsdelivr
+         CDN (keeps the real-worker experiment fully offline). -->
+    <script type="py-config">
+    {
+        "interpreters": [
+            {
+                "src": "http://127.0.0.1:4183/fortweb/vendor/pyodide/0.29.3/pyodide.mjs",
+                "name": "pyodide-default",
+                "lang": "python"
+            }
+        ]
+    }
+    </script>
+    <pre id="status">IDLE</pre>
+    <pre id="result">(none)</pre>
+    <script type="module" src="./oobi-drive.js"></script>
+</body>
+</html>

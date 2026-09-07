@@ -30,6 +30,10 @@ class RuntimeFault(Exception):
 _CONFIG: dict = {}
 _STATE = None
 _REGISTRY = None
+# Test-only: last product close_state outcome (set after Habery.aclose returns).
+# Read by the reserved __test.oobi.p8 last_close probe. Not part of any product
+# response and harmless when unset.
+_LAST_CLOSE = None
 
 
 def configure_runtime(
@@ -372,12 +376,29 @@ def require_open_state(vault_id: str | None = None):
 
 
 async def close_state(*, clear: bool = False):
-    global _STATE
+    global _STATE, _LAST_CLOSE
     if _STATE is None:
         return
 
+    state = _STATE
     try:
-        await _STATE["hby"].aclose(clear=clear)
+        await state["hby"].aclose(clear=clear)
+        # aclose is the guaranteed-flush close path: WebBaser/WebKeeper set
+        # .opened=False only after their async flush completes. Recording that
+        # here is the product-close proof (probe __test.oobi.p8 last_close).
+        _LAST_CLOSE = {
+            "returned": True,
+            "clear": bool(clear),
+            "baser_opened": bool(getattr(getattr(state.get("hby"), "db", None), "opened", None)),
+            "keeper_opened": bool(getattr(getattr(state.get("hby"), "ks", None), "opened", None)),
+        }
+    except Exception as exc:  # noqa: BLE001 - record failure then re-raise
+        _LAST_CLOSE = {
+            "returned": False,
+            "clear": bool(clear),
+            "error": str(exc)[:200],
+        }
+        raise
     finally:
         _STATE = None
 

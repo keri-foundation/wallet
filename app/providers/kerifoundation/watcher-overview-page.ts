@@ -5,6 +5,10 @@ import { announce } from "../../ui/core/a11y.js";
 import { emptyStateHtml } from "../../ui/composites/empty-state.js";
 import { showToast } from "../../ui/composites/toast.js";
 import { buttonHtml } from "../../ui/primitives/button.js";
+import {
+    renderDirectServiceCard,
+    type ServicesOverview,
+} from "./witness-overview-page.js";
 
 interface VaultRecord {
     id: string;
@@ -42,6 +46,7 @@ interface WatcherOverviewProps {
     bootstrapState: BootstrapState;
     watchers: WatcherRecord[];
     watcherError?: string;
+    services?: ServicesOverview;
     onRefreshStatuses(): Promise<void>;
 }
 
@@ -145,6 +150,7 @@ export function renderWatcherOverviewPage({
     bootstrapState,
     watchers,
     watcherError,
+    services,
     onRefreshStatuses,
 }: WatcherOverviewProps) {
     if (bootstrapState.account?.status !== "onboarded") {
@@ -190,6 +196,15 @@ export function renderWatcherOverviewPage({
             );
             summaryCard.append(summary);
             page.append(summaryCard);
+
+            if (services) {
+                const servicesCard = document.createElement("div");
+                servicesCard.innerHTML = renderDirectServiceCard(services);
+                const first = servicesCard.firstElementChild;
+                if (first instanceof HTMLElement) {
+                    page.append(first);
+                }
+            }
 
             if (watcherError) {
                 const warning = document.createElement("p");

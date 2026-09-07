@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -59,6 +60,21 @@ class KfVaultState:
     witness_eids: list[str] = field(default_factory=list)
     witness_auths: list[dict] = field(default_factory=list)
     watcher_eid: str = ""
+    watcher_url: str = ""
+    # Verified direct-service milestones (proven during the hosted onboarding
+    # run). Persisted so a fresh worker can render truthful direct state
+    # without re-deriving protocol facts from Kf Boot management.
+    witness_url: str = ""
+    witness_oobi_verified: bool = False
+    witness_registered: bool = False
+    witness_receipt_verified: bool = False
+    watcher_oobi_verified: bool = False
+    watcher_introduced: bool = False
+    watcher_query_verified: bool = False
+    watcher_observed_sn: int = 0
+    # Bounded, truthful direct-query error context for a required watcher that
+    # could not be verified during onboarding (empty on success / no watcher).
+    watcher_query_error: str = ""
     failure_reason: str = ""
 
 
@@ -157,6 +173,16 @@ def _kf_state_view(record: KfVaultState):
         "witnessEids": list(record.witness_eids or []),
         "witnessAuthPanels": _witness_auth_panels(record),
         "watcherEid": record.watcher_eid,
+        "watcherUrl": record.watcher_url,
+        "witnessUrl": record.witness_url,
+        "witnessOobiVerified": record.witness_oobi_verified,
+        "witnessRegistered": record.witness_registered,
+        "witnessReceiptVerified": record.witness_receipt_verified,
+        "watcherOobiVerified": record.watcher_oobi_verified,
+        "watcherIntroduced": record.watcher_introduced,
+        "watcherQueryVerified": record.watcher_query_verified,
+        "watcherObservedSn": record.watcher_observed_sn,
+        "watcherQueryError": record.watcher_query_error,
         "failureReason": record.failure_reason,
     }
 
@@ -237,18 +263,11 @@ def _validate_kf_account_witness_profile(hab, *, witness_eids: list[str], toad: 
 
 
 def _iter_hab_kel_messages(hab):
-    messages = {}
-    for msg in hab.db.clonePreIter(pre=hab.pre):
-        raw = bytes(msg)
-        serder = vaulting.load_modules()["serdering"].SerderKERI(raw=raw)
-        sn = int(getattr(serder, "sn", serder.ked.get("s", 0)) or 0)
-        if sn in messages:
-            continue
-        messages[sn] = raw
-
     last_sn = int(getattr(getattr(hab, "kever", None), "sn", -1) or -1)
     for sn in range(last_sn + 1):
-        yield messages.get(sn, bytes(hab.makeOwnEvent(sn=sn)))
+        # watcher-hk on_post parses one plain KERI message per request (no
+        # AttachmentGroup pipelined counter), so send the unpipelined replay.
+        yield transporting.own_event_replay(hab, sn=sn, pipelined=False)
 
 
 def _totp_code(seed: str, *, period: int = 30, digits: int = 6) -> str:
@@ -484,7 +503,11 @@ def _ingest_witness_receipt_fallback(hab, witness: dict, raw_bytes: bytes):
     if receipt.ilk != "rct":
         return False
 
+    # Receipt events use ``d`` for the receipted event digest; SerderKERI
+    # exposes that field as ``said`` for rct messages.
     said = receipt.said
+    if not said:
+        return False
     event = hab.db.evts.get(keys=(hab.pre.encode("utf-8"), said.encode("utf-8")))
     if event is None:
         return False
@@ -504,20 +527,55 @@ def _ingest_witness_receipt_fallback(hab, witness: dict, raw_bytes: bytes):
         strip=True,
         version=transporting._kf_reply_parser_version(raw_bytes),
     )
-    if counter.name != modules["eventing"].Codens.NonTransReceiptCouples:
+    witness["_receipt_fallback"] = f"counter={counter.name}:{counter.count} remaining={len(ims)}"
+    if counter.name == modules["eventing"].Codens.AttachmentGroup:
+        group_size = counter.byteCount(cold=modules["kering"].Colds.txt)
+        if len(ims) < group_size:
+            return False
+        ims = bytearray(ims[:group_size])
+        counter = modules["eventing"].Counter(
+            qb64b=ims,
+            strip=True,
+            version=transporting._kf_reply_parser_version(raw_bytes),
+        )
+        witness["_receipt_fallback"] += f" inner={counter.name}:{counter.count}"
+    if counter.name == modules["eventing"].Codens.NonTransReceiptCouples:
+        group_size = counter.byteCount(cold=modules["kering"].Colds.txt)
+        if len(ims) < group_size:
+            return False
+        couples = bytearray(ims[:group_size])
+        added = False
+        while couples:
+            verfer = modules["eventing"].Verfer(qb64b=couples, strip=True)
+            cigar = modules["eventing"].Cigar(qb64b=couples, strip=True)
+            if verfer.qb64 != witness_eid or not verfer.verify(cigar.raw, event.raw):
+                continue
+            wiger = modules["eventing"].Siger(raw=cigar.raw, index=index, verfer=verfer)
+            added = hab.db.wigs.add(keys=vaulting.dg_key(hab.pre, said), val=wiger) or added
+        witness["_receipt_fallback"] += f" couples_added={added}"
+        return added
+
+    if counter.name != modules["eventing"].Codens.WitnessIdxSigs:
         return False
 
+    group_size = counter.byteCount(cold=modules["kering"].Colds.txt)
+    witness["_receipt_fallback"] += f" group_size={group_size}"
+    if len(ims) < group_size:
+        return False
+    signatures = bytearray(ims[:group_size])
     added = False
-    for _ in range(counter.count):
-        verfer = modules["eventing"].Verfer(qb64b=ims, strip=True)
-        cigar = modules["eventing"].Cigar(qb64b=ims, strip=True)
-        if verfer.qb64 != witness_eid:
+    verfer = modules["eventing"].Verfer(qb64=witness_eid)
+    while signatures:
+        wiger = modules["eventing"].Siger(qb64b=signatures, strip=True, verfer=verfer)
+        if wiger.index != index:
+            witness["_receipt_fallback"] += f" index={wiger.index}!={index}"
             continue
-        if not verfer.verify(cigar.raw, event.raw):
+        if not verfer.verify(wiger.raw, event.raw):
+            witness["_receipt_fallback"] += " signature_invalid"
             continue
-        wiger = modules["eventing"].Siger(raw=cigar.raw, index=index, verfer=verfer)
         added = hab.db.wigs.add(keys=vaulting.dg_key(hab.pre, said), val=wiger) or added
 
+    witness["_receipt_fallback"] += f" added={added}"
     return added
 
 
@@ -548,14 +606,23 @@ def _receipt_state_detail(hab, witness: dict, said: str):
         f"pwes={len(pwes)} "
         f"uwes={len(uwes)} "
         f"ures={len(ures)} "
-        f"witness={str(witness.get('eid', '') or '')}"
+        f"witness={str(witness.get('eid', '') or '')} "
+        f"receipt_meta={str(witness.get('_receipt_meta', '') or '')} "
+        f"receipt_fallback={str(witness.get('_receipt_fallback', '') or '')}"
     )
 
 
 async def _register_with_witness(hab, witness: dict):
-    kel = bytearray()
-    for msg in hab.db.clonePreIter(pre=hab.pre):
-        kel.extend(msg)
+    # /aids validates a single *signed* inception message. clonePreIter yields
+    # stored event bodies, which omit CESR controller-signature attachments;
+    # msgOwnEvent supplies the complete event that witness-hk parses.
+    kel = bytearray(hab.msgOwnEvent(sn=0))
+
+    inception_pre = ""
+    try:
+        inception_pre = str(vaulting.load_modules()["serdering"].SerderKERI(raw=bytes(kel)).pre or "")
+    except Exception:
+        inception_pre = "unknown"
 
     form_fields = {
         "kel": kel.decode("utf-8"),
@@ -585,7 +652,11 @@ async def _register_with_witness(hab, witness: dict):
     raw_text = await transporting.response_text(response)
     if int(response.status) >= 400:
         detail = raw_text.strip() or f"HTTP {response.status}"
-        raise vaulting.RuntimeFault("NETWORK_ERROR", f"{detail} from {witness_url}")
+        raise vaulting.RuntimeFault(
+            "NETWORK_ERROR",
+            f"{detail} from {witness_url} "
+            f"(account_aid={hab.pre} inception_pre={inception_pre} witness_eid={witness['eid']})",
+        )
 
     try:
         data = json.loads(raw_text or "{}")
@@ -638,7 +709,13 @@ async def _submit_witness_rotation_receipt(hab, witness: dict, auth_header: str,
             f"Witness {witness['eid']} rejected the rotation event: {detail}",
         )
 
-    hab.psr.parseOne(ims=bytearray(raw_bytes))
+    receipt = modules["serdering"].SerderKERI(raw=raw_bytes)
+    # Bounded receipt metadata for failure diagnostics — never the signed
+    # attachment or full KED (which can carry controller digests/seals).
+    witness["_receipt_meta"] = (
+        f"said={receipt.said} body={receipt.size} attachment={len(raw_bytes) - receipt.size}"
+    )
+    hab.psr.parseOne(ims=bytearray(raw_bytes), version=receipt.pvrsn)
     if getattr(hab.psr, "kvy", None) is not None:
         hab.psr.kvy.processEscrows()
     if not _get_witness_receipts(hab.db, hab.pre, hab.kever.serder.said):
@@ -662,7 +739,7 @@ async def _rotate_kf_account_to_witnesses(hab, witnesses: list[dict], *, toad: i
         )
 
     hab.rotate(toad=toad, cuts=[], adds=allocated_wits)
-    rotation_msg = bytes(hab.makeOwnEvent(sn=hab.kever.sn))
+    rotation_msg = bytes(hab.msgOwnEvent(sn=hab.kever.sn))
 
     for witness in witnesses:
         auth_header = _witness_auth_header(str(witness.get("totpSeed", "") or ""))
@@ -677,14 +754,30 @@ async def _rotate_kf_account_to_witnesses(hab, witnesses: list[dict], *, toad: i
         )
 
 
-async def _send_direct_cesr(url: str, msg, *, destination: str = "", method: str = "PUT"):
-    await transporting.post_cesr_stream(
-        url,
-        ims=bytes(msg),
-        destination=destination,
-        method=method,
-        timeout_ms=_CONFIG["cesr_timeout_ms"],
-    )
+async def _send_direct_cesr(
+    url: str,
+    msg,
+    *,
+    destination: str = "",
+    method: str = "POST",
+    purpose: str = "direct CESR message",
+):
+    # watcher-hk on_post accepts one plain KERI message per request as a CESR
+    # body + CESR-Attachment header (single-message browser transport). The
+    # raw-stream PUT path is only for pipelined attachment groups, which the
+    # ordinary browser introduction does not use.
+    body, attachment = transporting._split_cesr_message(msg)
+    try:
+        await transporting.post_cesr(
+            url,
+            body=body,
+            attachment=attachment,
+            destination=destination,
+            method=method,
+            timeout_ms=_CONFIG["cesr_timeout_ms"],
+        )
+    except vaulting.RuntimeFault as exc:
+        raise vaulting.RuntimeFault(exc.code, f"Watcher rejected {purpose}: {exc}") from exc
 
 
 async def _introduce_account_to_watcher(hab, watcher: dict, witnesses: list[dict]):
@@ -700,10 +793,20 @@ async def _introduce_account_to_watcher(hab, watcher: dict, witnesses: list[dict
             data=dict(cid=hab.pre, role="watcher", eid=watcher_eid),
         )
         hab.psr.parseOne(ims=bytes(end_role))
-        await _send_direct_cesr(watcher_url, end_role, destination=watcher_eid)
+        await _send_direct_cesr(
+            watcher_url,
+            end_role,
+            destination=watcher_eid,
+            purpose="the controller watcher endpoint authorization",
+        )
 
-    for msg in _iter_hab_kel_messages(hab):
-        await _send_direct_cesr(watcher_url, msg, destination=watcher_eid)
+    for sn, msg in enumerate(_iter_hab_kel_messages(hab)):
+        await _send_direct_cesr(
+            watcher_url,
+            msg,
+            destination=watcher_eid,
+            purpose=f"the controller key event at sequence number {sn}",
+        )
 
     add_reply = hab.reply(
         route=f"/watcher/{watcher_eid}/add",
@@ -714,7 +817,12 @@ async def _introduce_account_to_watcher(hab, watcher: dict, witnesses: list[dict
         ),
     )
     hab.psr.parseOne(ims=bytes(add_reply))
-    await _send_direct_cesr(watcher_url, add_reply, destination=watcher_eid)
+    await _send_direct_cesr(
+        watcher_url,
+        add_reply,
+        destination=watcher_eid,
+        purpose="the controller watcher-add request",
+    )
 
 
 def _local_connection_status(hby, organizer, aid: str):
@@ -851,6 +959,296 @@ async def _refresh_kf_watcher_status(
     }
 
 
+async def _query_kf_watcher_direct(
+    hby,
+    hab,
+    *,
+    watcher_eid: str,
+    watcher_url: str,
+):
+    """Send a controller-signed KERI ``ksn`` query directly to the hosted watcher
+    over its public HTTPS CESR listener and return the parsed key-state reply.
+
+    This exercises the actual Fort Web -> watcher query path (watcher USE), not
+    the Kf Boot management surface. The watcher validates that the query source
+    is this account's controller AID and replies with an endorsed ``/ksn`` reply
+    whose ``a`` payload is the controller's key state as the watcher holds it.
+
+    Verification scope: the reply is parsed (``rpy`` ilk, ``/ksn/`` route) and
+    its reported key state is cross-checked byte-for-byte against this
+    controller's own authoritative local key state (AID, SN, digest, witness
+    set, toad). Because only the controller holds its own keys, an exact match
+    proves the watcher is answering with the controller's true current state.
+    The reply travels over the pinned public HTTPS endpoint; this routine does
+    NOT independently parse/verify the watcher's separate response-signature
+    attachment, so callers must not describe this as watcher-signature proof.
+    """
+    modules = vaulting.load_modules()
+    kering = modules["kering"]
+    eventing = modules["eventing"]
+    serdering = modules["serdering"]
+
+    watcher_url = str(watcher_url or "").strip().rstrip("/")
+    if not watcher_url:
+        raise vaulting.RuntimeFault("CONFLICT", "This account has no hosted watcher endpoint to query.")
+
+    qserder = eventing.query(
+        pre=hab.pre,
+        route="ksn",
+        query={"i": hab.pre, "src": watcher_eid},
+        version=kering.Vrsn_2_0,
+        pvrsn=kering.Vrsn_2_0,
+        kind=eventing.Kinds.json,
+    )
+    # Query messages must be endorsed with SealLast (lsgs / TransLastIdxSigGroups)
+    # so the receiving parser can recover the querier source. hab.endorse's
+    # documented rule is "Query messages should always use SealLast."
+    endorsed = hab.endorse(serder=qserder, last=True)
+    body, attachment = transporting._split_cesr_message(endorsed)
+
+    raw_bytes, _ = await transporting.post_cesr(
+        urljoin(f"{watcher_url}/", "/"),
+        body=body,
+        attachment=attachment,
+        destination=watcher_eid,
+        method="POST",
+        timeout_ms=_CONFIG["account_query_timeout_ms"],
+    )
+    if not raw_bytes:
+        raise vaulting.RuntimeFault("BAD_RESPONSE", "Watcher returned an empty reply to the key-state query.")
+
+    reply_serder = serdering.SerderKERI(raw=raw_bytes)
+    reply_ked = reply_serder.ked
+    reply_route = str(reply_ked.get("r", "") or "")
+    if str(reply_ked.get("t", "") or "") != "rpy":
+        raise vaulting.RuntimeFault(
+            "BAD_RESPONSE",
+            f"Watcher query reply had unexpected ilk '{reply_ked.get('t', '')}', expected rpy.",
+        )
+    if not reply_route.startswith("/ksn/"):
+        raise vaulting.RuntimeFault(
+            "BAD_RESPONSE",
+            f"Watcher query reply route '{reply_route}' did not match /ksn/.",
+        )
+
+    data = reply_ked.get("a", {})
+    if not isinstance(data, dict):
+        raise vaulting.RuntimeFault("BAD_RESPONSE", "Watcher query reply did not include a key-state payload.")
+
+    # Cross-check the reply's reported key state against this controller's own
+    # authoritative local key state. The controller holds its own keys, so an
+    # exact match proves the watcher answered with the controller's true state.
+    local_sn = int(getattr(getattr(hab, "kever", None), "sn", 0) or 0)
+    local_digest = str(getattr(getattr(getattr(hab, "kever", None), "serder", None), "said", "") or "")
+    local_wits = list(getattr(getattr(hab, "kever", None), "wits", []) or [])
+    local_toad = int(getattr(getattr(getattr(hab, "kever", None), "toader", None), "num", 0) or 0)
+
+    reply_sn_hex = str(data.get("s", "") or "")
+    reply_digest = str(data.get("d", "") or "")
+    reply_wits = list(data.get("b", []) or [])
+    reply_toad_hex = str(data.get("bt", "") or "")
+    try:
+        reply_sn = int(reply_sn_hex, 16) if reply_sn_hex else -1
+        reply_toad = int(reply_toad_hex, 16) if reply_toad_hex else 0
+    except ValueError:
+        raise vaulting.RuntimeFault("BAD_RESPONSE", "Watcher query reply carried a non-hex SN or toad.")
+    state_match = (
+        str(data.get("i", "") or "") == hab.pre
+        and reply_sn == local_sn
+        and bool(local_digest)
+        and reply_digest == local_digest
+        and reply_wits == local_wits
+        and reply_toad == local_toad
+    )
+    if not state_match:
+        raise vaulting.RuntimeFault(
+            "BAD_RESPONSE",
+            (
+                "Watcher query reply key state does not match this controller's authoritative "
+                f"key state (sn={reply_sn} vs {local_sn}, digest={reply_digest[:12] if reply_digest else ''} "
+                f"vs {local_digest[:12] if local_digest else ''}, wits={reply_wits} vs {local_wits}, "
+                f"toad={reply_toad} vs {local_toad})."
+            ),
+        )
+
+    return {
+        "eid": watcher_eid,
+        "url": watcher_url,
+        "querySaid": qserder.said,
+        "replySaid": str(reply_serder.said or ""),
+        "replyRoute": reply_route,
+        "protocolMajor": int(reply_serder.pvrsn.major),
+        "controller": str(data.get("i", "") or ""),
+        "sn": reply_sn_hex,
+        "digest": reply_digest,
+        "kind": str(reply_ked.get("et", "") or ""),
+        "witnesses": reply_wits,
+        "toad": reply_toad_hex,
+        "stateMatch": True,
+        "stateMatchDetail": "reply key state equals the controller's authoritative local key state",
+    }
+
+
+def _kf_services_overview(hby, organizer, record: KfVaultState) -> dict:
+    """Return the normalized hosted-service connection view model.
+
+    This is the domain-layer boundary the UI consumes. It carries NO protocol
+    machinery: it derives direct service state purely from milestones persisted
+    during the hosted onboarding run (OOBI resolution, registration, receipt,
+    introduction, direct query with controller-state cross-check), kept
+    independent from Kf Boot account-management synchronization.
+    """
+    has_account = _has_kf_account(record)
+
+    witness_eid = record.witness_eids[0] if record.witness_eids else ""
+    witness_endpoint = record.witness_url or ""
+    witness_oobi = record.witness_oobi_verified and bool(witness_eid)
+    witness_registered = record.witness_registered and bool(witness_eid)
+    witness_receipt = record.witness_receipt_verified and bool(witness_eid)
+    if has_account and witness_eid and witness_oobi and witness_registered and witness_receipt:
+        witness_direct = "connected"
+    elif has_account and witness_eid:
+        witness_direct = "partial"
+    else:
+        witness_direct = "not_connected"
+
+    watcher_eid = record.watcher_eid or ""
+    watcher_endpoint = record.watcher_url or ""
+    watcher_oobi = record.watcher_oobi_verified and bool(watcher_eid)
+    watcher_introduced = record.watcher_introduced and bool(watcher_eid)
+    watcher_query = record.watcher_query_verified and bool(watcher_eid)
+    watcher_sn = record.watcher_observed_sn
+    if has_account and watcher_eid and watcher_oobi and watcher_introduced and watcher_query and watcher_sn >= 1:
+        watcher_direct = "connected"
+    elif has_account and watcher_eid and watcher_introduced:
+        watcher_direct = "partial"
+    else:
+        watcher_direct = "not_connected"
+
+    # Kf Boot account-management synchronization is a separate surface from the
+    # direct service proof. It is not derived here; it is reported independently
+    # (the /account management 409 remains a known follow-up).
+    management_sync = "pending" if has_account else "none"
+
+    return {
+        "accountAid": record.account_aid or "",
+        "status": record.status,
+        "witness": {
+            "eid": witness_eid,
+            "endpoint": witness_endpoint,
+            "oobiVerified": witness_oobi,
+            "registered": witness_registered,
+            "receiptVerified": witness_receipt,
+            "directStatus": witness_direct,
+            "managementSyncStatus": management_sync,
+        },
+        "watcher": {
+            "eid": watcher_eid,
+            "endpoint": watcher_endpoint,
+            "oobiVerified": watcher_oobi,
+            "introduced": watcher_introduced,
+            "queryVerified": watcher_query,
+            "observedSn": watcher_sn,
+            "queryError": record.watcher_query_error,
+            "directStatus": watcher_direct,
+            "managementSyncStatus": management_sync,
+        },
+    }
+
+
+async def _await_kf_session_provisioned(
+    hby,
+    ephemeral_hab,
+    *,
+    surfaces: transporting.KfSurfaceConfig,
+    destination: str,
+    boot_server_aid: str,
+    session_id: str,
+    expected_witness_count: int,
+    watcher_required: bool,
+):
+    """Poll the Kf Boot onboarding session until its hosted witness pool (and,
+    when required, the hosted watcher) is allocated, or the session reaches a
+    terminal state. Returns the final session/status payload."""
+    if not session_id:
+        return {}
+    last_payload = {}
+    for _ in range(30):
+        reply = await transporting.send_kf_exn(
+            hby,
+            ephemeral_hab,
+            surface_name="onboarding",
+            surface_url=transporting.require_kf_surface_url(surfaces, "onboarding"),
+            route="/onboarding/session/status",
+            payload={"session_id": session_id},
+            destination=destination,
+            expected_sender=destination or boot_server_aid or "",
+            timeout_ms=_CONFIG["cesr_timeout_ms"],
+        )
+        last_payload = reply.get("payload") or {}
+        state = str(last_payload.get("state", "") or "")
+        if state in {"failed", "cancelled", "expired"}:
+            failure_reason = str(last_payload.get("failure_reason", "") or "").strip()
+            raise vaulting.RuntimeFault(
+                "CONFLICT",
+                failure_reason or f"The KF onboarding session is {state}.",
+            )
+        witnesses = last_payload.get("witnesses") or []
+        watcher = last_payload.get("watcher")
+        if len(witnesses) >= expected_witness_count and (not watcher_required or isinstance(watcher, dict)):
+            return last_payload
+        await asyncio.sleep(1.0)
+    state = str(last_payload.get("state", "") or "")
+    raise vaulting.RuntimeFault(
+        "TIMEOUT",
+        f"KF onboarding did not provision its hosted witness pool in time (session state '{state}').",
+    )
+
+
+async def _verify_kf_watcher_during_onboarding(
+    hby,
+    hab,
+    record: KfVaultState,
+    *,
+    watcher_eid: str,
+    watcher_url: str,
+):
+    """Run the direct watcher key-state query as part of normal hosted onboarding.
+
+    The product onboarding path (not a separate driver command) invokes the same
+    ``_query_kf_watcher_direct`` operation the live acceptance drives, so the
+    verified milestone is produced by the product flow itself.
+
+    Resume/idempotency rule: a current verified milestone is reused - no query is
+    re-issued when ``watcher_query_verified`` is already true and the stored
+    observed SN equals the account's current key-state SN. Otherwise (missing or
+    stale) the query runs again and the durable milestone is refreshed.
+
+    Never raises: a required watcher that is momentarily unverifiable does not
+    strand an otherwise-onboarded account. Returns
+    ``(verified, observed_sn, error, query)`` so the caller can persist truthful
+    direct-service state (the UI derives Connected only from a verified match).
+    """
+    account_sn = int(getattr(getattr(hab, "kever", None), "sn", 0) or 0)
+    if record.watcher_query_verified and record.watcher_observed_sn == account_sn:
+        return True, record.watcher_observed_sn, "", None
+    try:
+        query = await _query_kf_watcher_direct(
+            hby,
+            hab,
+            watcher_eid=watcher_eid,
+            watcher_url=watcher_url,
+        )
+    except Exception as exc:  # noqa: BLE001 - bounded failure, never aborts account onboarding
+        return False, account_sn, str(exc), None
+    observed_hex = str(query.get("sn", "") or "")
+    try:
+        observed_sn = int(observed_hex, 16) if observed_hex else account_sn
+    except ValueError:
+        observed_sn = account_sn
+    return True, observed_sn, "", query
+
+
 async def _run_kf_onboarding(
     hby,
     organizer,
@@ -916,12 +1314,12 @@ async def _run_kf_onboarding(
             )
             boot_server_aid = start_reply["sender"] or boot_server_aid
             start_payload = start_reply["payload"]
-            session_state = str(start_payload.get("state", "") or "")
             if start_payload.get("account_aid") and start_payload["account_aid"] != account_hab.pre:
                 raise vaulting.RuntimeFault(
                     "CONFLICT",
                     "The saved KF onboarding session is bound to a different permanent account AID.",
                 )
+            session_state = str(start_payload.get("state", "") or "")
             if session_state in {"failed", "cancelled", "expired"}:
                 failure_reason = str(start_payload.get("failure_reason", "") or "").strip()
                 _clear_kf_onboarding_session(hby, record, delete_auth_hab=True)
@@ -937,7 +1335,7 @@ async def _run_kf_onboarding(
             )
             await transporting.send_kf_event(
                 transporting.require_kf_surface_url(surfaces, "onboarding"),
-                ephemeral_hab.makeOwnInception(),
+                ephemeral_hab.msgOwnInception(),
                 destination=destination,
                 timeout_ms=_CONFIG["cesr_timeout_ms"],
             )
@@ -963,6 +1361,25 @@ async def _run_kf_onboarding(
         record.onboarding_session_id = str(start_payload.get("session_id", "") or "")
         record.onboarding_auth_alias = getattr(ephemeral_hab, "name", "")
         _save_kf_state(hby, record)
+
+        # Kf Boot provisions hosted witnesses/watcher asynchronously after
+        # session/start returns, so poll session/status until the witness pool
+        # (and required watcher) is allocated before continuing onboarding.
+        destination = transporting.kf_surface_destination(
+            surfaces,
+            surface_name="onboarding",
+            boot_server_aid=boot_server_aid,
+        )
+        start_payload = await _await_kf_session_provisioned(
+            hby,
+            ephemeral_hab,
+            surfaces=surfaces,
+            destination=destination,
+            boot_server_aid=boot_server_aid,
+            session_id=str(start_payload.get("session_id", "") or ""),
+            expected_witness_count=int(option["witnessCount"]),
+            watcher_required=bool(snapshot["bootstrap"]["watcherRequired"]),
+        )
 
         for entry in start_payload.get("witnesses", []):
             if not isinstance(entry, dict):
@@ -1159,6 +1576,41 @@ async def _run_kf_onboarding(
         if str(witness.get("totpSeed", "") or "")
     ]
     record.watcher_eid = watcher_row["eid"] if watcher_row is not None else ""
+    record.watcher_url = watcher_row["watcherUrl"] if watcher_row is not None else ""
+    # Persist the direct-service milestones proven during this run. Reaching
+    # this point means: witness OOBI resolved + registered at POST /aids + a
+    # real witness receipt persisted after the witnessed rotation, and the
+    # watcher OOBI resolved + the end-role/icp/rot/watcher-add introduction was
+    # accepted. The domain view model renders these as direct service state.
+    record.witness_url = witness_rows[0]["witnessUrl"] if witness_rows else ""
+    record.witness_oobi_verified = True
+    record.witness_registered = True
+    record.witness_receipt_verified = True
+    record.watcher_oobi_verified = watcher_row is not None and bool(watcher_row.get("oobi"))
+    record.watcher_introduced = watcher_row is not None
+    watcher_query_detail = None
+    if watcher_row is not None:
+        # Normal product onboarding performs the direct watcher key-state query
+        # itself (the same runtime operation the live acceptance drives). The
+        # reply is cross-checked against this controller's authoritative local
+        # key state, so a matching reply persists the verified milestone through
+        # the product path - a test driver is not required to create it.
+        verified, observed_sn, watcher_error, watcher_query_detail = (
+            await _verify_kf_watcher_during_onboarding(
+                hby,
+                account_hab,
+                record,
+                watcher_eid=str(watcher_row.get("eid", "") or ""),
+                watcher_url=str(watcher_row.get("watcherUrl", "") or ""),
+            )
+        )
+        record.watcher_query_verified = verified
+        record.watcher_observed_sn = observed_sn
+        record.watcher_query_error = watcher_error
+    else:
+        record.watcher_query_verified = False
+        record.watcher_observed_sn = int(getattr(getattr(account_hab, "kever", None), "sn", 0) or 0)
+        record.watcher_query_error = ""
     record.failure_reason = ""
     _clear_kf_onboarding_session(hby, record, delete_auth_hab=True)
 
@@ -1167,6 +1619,8 @@ async def _run_kf_onboarding(
     reopened_organizer = reopened["modules"]["organizing"].Organizer(hby=reopened["hby"])
     return {
         "account": _kf_state_view(reopened_record),
+        "watcherQuery": watcher_query_detail,
+        "watcherQueryError": str(reopened_record.watcher_query_error or ""),
         "witnesses": await _list_kf_account_witnesses(
             reopened["hby"],
             reopened_organizer,
@@ -1193,7 +1647,7 @@ async def dispatch(method: str, params: dict):
         raw_surface_config = params.get("surfaceConfig")
         surface_config = transporting.coerce_kf_surface_config(
             raw_surface_config,
-            fallback_boot_url=record.boot_url,
+            fallback_boot_url=params.get("bootUrl") or record.boot_url,
         )
 
         try:
@@ -1223,7 +1677,7 @@ async def dispatch(method: str, params: dict):
         record = _load_kf_state(hby)
         surface_config = transporting.coerce_kf_surface_config(
             params.get("surfaceConfig"),
-            fallback_boot_url=record.boot_url,
+            fallback_boot_url=params.get("bootUrl") or record.boot_url,
         )
         account_aid = str(params.get("accountAid") or "").strip()
         return await _run_kf_onboarding(
@@ -1270,6 +1724,53 @@ async def dispatch(method: str, params: dict):
         return {
             "account": _kf_state_view(record),
             "watcher": await _refresh_kf_watcher_status(hby, organizer, record, watcher_id, surface_config),
+        }
+
+    if method == "kf.account.watchers.query":
+        record = _load_kf_state(hby)
+        hab = _require_kf_account_hab(hby, record)
+        watcher_id = str(params.get("watcherEid") or record.watcher_eid or "").strip()
+        if not watcher_id:
+            raise vaulting.RuntimeFault("CONFLICT", "This account has no hosted watcher AID to query.")
+        watcher_url = str(params.get("watcherUrl") or record.watcher_url or "").strip()
+        query = await _query_kf_watcher_direct(
+            hby,
+            hab,
+            watcher_eid=watcher_id,
+            watcher_url=watcher_url,
+        )
+        local_status, local_tone = _local_connection_status(hby, organizer, watcher_id)
+        query["localStatus"] = local_status
+        query["localStatusTone"] = local_tone
+        # A successful direct query whose reply key state matches this
+        # controller's own authoritative local key state is the strongest
+        # persisted proof that the watcher accepted and can answer the
+        # controller over its public path. Persist the durable milestone BEFORE
+        # reporting success; if the durable write fails, the query must fail
+        # closed (never report a verified milestone that was not persisted).
+        record.watcher_query_verified = True
+        observed = str(query.get("sn", "") or "")
+        try:
+            record.watcher_observed_sn = int(observed, 16) if observed else 0
+        except ValueError:
+            record.watcher_observed_sn = 0
+        try:
+            _save_kf_state(hby, record)
+        except Exception as exc:  # noqa: BLE001 - surface as a product fault
+            raise vaulting.RuntimeFault(
+                "RUNTIME_ERROR",
+                f"Watcher query succeeded but its verified milestone could not be persisted: {exc}",
+            ) from exc
+        return {
+            "account": _kf_state_view(record),
+            "watcher": query,
+        }
+
+    if method == "kf.services.overview":
+        record = _load_kf_state(hby)
+        return {
+            "account": _kf_state_view(record),
+            "services": _kf_services_overview(hby, organizer, record),
         }
 
     raise vaulting.RuntimeFault("BAD_REQUEST", f"Runtime method '{method}' is not allowed.")

@@ -202,6 +202,7 @@ export async function loadPage({
                 bootstrapState: assumeType<WitnessOverviewProps["bootstrapState"]>(pageData.bootstrapState),
                 witnesses: assumeType<WitnessOverviewProps["witnesses"]>(pageData.witnesses || []),
                 witnessError: pageData.witnessError || "",
+                services: assumeType<WitnessOverviewProps["services"]>(pageData.services),
                 onLoadBootstrap: actions.loadKfBootstrap,
                 async onStartOnboarding(request) {
                     await actions.startKfOnboarding(request);
@@ -220,6 +221,7 @@ export async function loadPage({
                 bootstrapState: assumeType<WatcherOverviewProps["bootstrapState"]>(pageData.bootstrapState),
                 watchers,
                 watcherError: pageData.watcherError || "",
+                services: assumeType<WatcherOverviewProps["services"]>(pageData.services),
                 async onRefreshStatuses() {
                     await actions.refreshKfWatcherStatuses(watchers.map((watcher) => watcher.eid));
                 },

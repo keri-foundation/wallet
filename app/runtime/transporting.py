@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from inspect import isawaitable
@@ -11,6 +12,10 @@ import vaulting
 
 
 _CONFIG: dict = {}
+
+# Only loopback/local dev endpoints are routed through the same-origin dev
+# proxy. External/public http(s) endpoints are fetched directly by the browser.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def configure_runtime(
@@ -147,6 +152,12 @@ def proxy_url(url: str):
 
     same_origin = urlparse(origin)
     if parsed.scheme == same_origin.scheme and parsed.netloc == same_origin.netloc:
+        return url
+
+    host = (parsed.hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        # External/public endpoint: the browser fetches it directly. Only
+        # loopback/local dev endpoints need the same-origin dev proxy.
         return url
 
     path = parsed.path or "/"
@@ -331,6 +342,11 @@ def _split_cesr_message(ims):
     return body, attachment
 
 
+def sha256_hex(data: bytes) -> str:
+    """Bounded non-sensitive digest for diagnostics (never the raw payload)."""
+    return hashlib.sha256(data).hexdigest()
+
+
 def _split_cesr_stream(ims):
     serders = []
     buf = bytearray(ims)
@@ -350,17 +366,27 @@ def _count_sender_escrow(store, sender):
         return 0
 
 
-def _sender_parse_diagnostics(hby, sender: str):
+def _sender_parse_diagnostics(hby, sender: str, *, stream=None):
     if not sender:
         return ""
 
     state_present = bool(hby.db.states.get(keys=sender))
-    return (
+    detail = (
         f"sender_state={state_present} "
         f"ooe={_count_sender_escrow(hby.db.ooes, sender)} "
         f"pse={_count_sender_escrow(hby.db.pses, sender)} "
         f"pwe={_count_sender_escrow(hby.db.pwes, sender)}"
     )
+    if stream:
+        try:
+            ilks = ",".join(
+                f"{s.ked.get('t', '?')}:{str(s.ked.get('i', '') or '')[:8]}:s{str(s.ked.get('s', '') or '?')}"
+                for s in stream[:10]
+            )
+            detail += f" stream[{len(stream)}]=({ilks})"
+        except Exception:
+            pass
+    return detail
 
 
 def _restore_sender_kever_from_state(hby, sender: str):
@@ -473,19 +499,25 @@ async def post_cesr_stream(
     return raw_bytes
 
 
-def _consume_cesr_reply(parser, *, ims: bytearray, kvy, rvy, exc):
+def _consume_cesr_reply(parser, *, ims: bytearray):
     if len(_split_cesr_stream(ims)) > _CONFIG["reply_message_limit"]:
         raise vaulting.RuntimeFault("BAD_RESPONSE", "KF service reply exceeded the maximum supported message count.")
     steps = 0
 
     while ims:
         remaining = len(ims)
-        parsator = parser.msgParsator(
+        # f4b9 Parser binds kvy/rvy/exc at construction. A KF service reply is a
+        # multi-message CESR stream (e.g. prepended sender icp + exn), so it must
+        # be parsed unframed. Crucially we use allParsator (not msgParsator):
+        # msgParsator only *extracts* message substreams and never routes them,
+        # so a prepended sender icp would never be committed to hby.db.kevers and
+        # the reply sender could not be verified. allParsator routes each message
+        # to the bound kvy/rvy/exc, processing the KEL and creating kevers.
+        parsator = parser.allParsator(
             ims=ims,
-            kvy=kvy,
-            rvy=rvy,
-            exc=exc,
+            framed=False,
             local=False,
+            version=getattr(parser, "version", None),
         )
 
         while True:
@@ -542,7 +574,8 @@ def parse_cesr_reply(
         hby,
         version=_kf_reply_parser_version(ims),
     )
-    _consume_cesr_reply(parser, ims=bytearray(ims), kvy=kvy, rvy=rvy, exc=exc)
+    parser_version_major = getattr(getattr(parser, "version", None), "major", None)
+    _consume_cesr_reply(parser, ims=bytearray(ims))
     kvy.processEscrows()
 
     last = serders[-1]
@@ -568,7 +601,24 @@ def parse_cesr_reply(
         )
     _restore_sender_kever_from_state(hby, sender)
     if sender and sender not in hby.kevers:
-        detail = _sender_parse_diagnostics(hby, sender)
+        detail = _sender_parse_diagnostics(hby, sender, stream=serders)
+        try:
+            kel_last = hby.db.kels.getLast(keys=sender, on=0) is not None
+        except Exception:
+            kel_last = None
+        detail += (
+            f" parser_version_major={parser_version_major} "
+            f"n_kevers_total={sum(1 for _ in hby.db.kevers)} "
+            f"sender_kel_last={kel_last}"
+        )
+        # Bounded, non-sensitive diagnostics only — never dump the signed CESR
+        # body/attachment (which carries controller/signer payloads).
+        detail += (
+            f" body_len={len(raw_bytes or b'')} "
+            f"attach_len={len((attachment_header or '').encode('utf-8'))} "
+            f"body_sha256={sha256_hex(raw_bytes or b'')} "
+            f"attach_sha256={sha256_hex((attachment_header or '').encode('utf-8'))}"
+        )
         raise vaulting.RuntimeFault(
             "BAD_RESPONSE",
             (
@@ -591,17 +641,39 @@ def parse_cesr_reply(
 
 
 def _iter_surface_keystate_messages(*, hab, start_sn: int, end_sn: int):
-    messages = {}
-    for msg in hab.db.clonePreIter(pre=hab.pre):
-        raw = bytes(msg)
-        serder = vaulting.load_modules()["serdering"].SerderKERI(raw=raw)
-        sn = int(getattr(serder, "sn", serder.ked.get("s", 0)) or 0)
-        if sn < start_sn or sn > end_sn or sn in messages:
-            continue
-        messages[sn] = raw
-
     for sn in range(start_sn, end_sn + 1):
-        yield sn, messages.get(sn, bytes(hab.makeOwnEvent(sn=sn)))
+        yield sn, own_event_replay(hab, sn=sn, pipelined=True)
+
+
+def own_event_replay(hab, *, sn: int, pipelined: bool = False):
+    """Return a locally signed event plus any persisted witness receipts.
+
+    Uses canonical KERI messagize to include both controller signatures
+    (sigers) and witness receipts (wigers) in standard CESR attachment order.
+    """
+    modules = vaulting.load_modules()
+    msg = bytearray(hab.msgOwnEvent(sn=sn))
+    serder = modules["serdering"].SerderKERI(raw=bytes(msg))
+    wigs = hab.db.wigs.get(keys=vaulting.dg_key(hab.pre, serder.said)) or []
+    if not wigs:
+        return bytes(msg)
+
+    sigers = hab.db.sigs.get(keys=vaulting.dg_key(hab.pre, serder.said)) or []
+    try:
+        js.console.log(
+            f"[transport] replay sn={sn} sigers={len(sigers)} wigs={len(wigs)} pipelined={pipelined}"
+        )
+    except Exception:
+        pass
+    return bytes(
+        modules["eventing"].messagize(
+            serder,
+            sigers=sigers,
+            wigers=wigs,
+            framed=pipelined,
+            gvrsn=getattr(serder, "gvrsn", None) or serder.pvrsn,
+        )
+    )
 
 
 async def _ensure_surface_keystate(hab, *, surface_name: str, surface_url: str, destination: str = ""):
@@ -656,13 +728,18 @@ async def send_kf_exn(
             surface_url=surface_url,
             destination=destination,
         )
-    serder, end = modules["exchanging"].exchange(
+    # f4b9 keri.peer.exchanging exposes exchangeOld (V2 default) / specialExchange;
+    # the historical module-level `exchange` was removed. exchangeOld builds a V2
+    # `exn` serder from sender/receiver/route/attributes; the exchange end
+    # attachment is empty for a plain exn (mirrors Hab.exchange's non-embeds path).
+    serder = modules["exchanging"].exchangeOld(
         route=route,
-        payload=payload,
+        attributes=payload,
         sender=hab.pre,
-        recipient=destination or None,
+        receiver=destination or "",
     )
-    ims = hab.endorse(serder=serder, last=False, pipelined=False)
+    end = bytearray()
+    ims = hab.endorse(serder=serder, last=False)
     attachment = bytearray(ims)
     del attachment[:serder.size]
     if end:

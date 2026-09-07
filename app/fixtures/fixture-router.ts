@@ -127,6 +127,39 @@ const FIXTURES: Record<string, FixtureFactory> = {
         route: { name: "kf-witnesses", shellMode: "vault", navMode: "plugin", path: "/_fixtures/witnesses/account", params: { vaultId: FIXTURE_VAULT_ID_CONST } },
     }),
 
+    "witnesses/direct-connected": () => ({
+        page: renderWitnessOverviewPage({
+            bootstrapState: fixtureBootstrapOnboarded,
+            witnesses: fixtureWitnesses,
+            witnessError: "",
+            services: {
+                witness: {
+                    eid: "EHfYtj7b4M8a8Y6N2xMqT8JgZ2YbJ8mX7e6sHjYb8c0=",
+                    endpoint: "https://138.68.53.132:5633",
+                    oobiVerified: true,
+                    registered: true,
+                    receiptVerified: true,
+                    directStatus: "connected",
+                    managementSyncStatus: "pending",
+                },
+                watcher: {
+                    eid: "EBiSD01QhoaDCiaqZrz9zrgItq1uSbGSny7pqcLDMOp_=",
+                    endpoint: "https://138.68.53.132:7633",
+                    oobiVerified: true,
+                    introduced: true,
+                    queryVerified: true,
+                    observedSn: 1,
+                    directStatus: "connected",
+                    managementSyncStatus: "pending",
+                },
+            },
+            onLoadBootstrap: loadBootstrapFixture(fixtureBootstrapOnboarded),
+            onStartOnboarding: asyncNoop,
+        }),
+        vault: fixtureVault,
+        route: { name: "kf-witnesses", shellMode: "vault", navMode: "plugin", path: "/_fixtures/witnesses/direct-connected", params: { vaultId: FIXTURE_VAULT_ID_CONST } },
+    }),
+
     "witnesses/error": () => ({
         page: renderWitnessOverviewPage({ bootstrapState: fixtureBootstrapOnboarded, witnesses: [], witnessError: "Failed to load hosted witness rows. The boot service returned HTTP 503.", onLoadBootstrap: loadBootstrapFixture(fixtureBootstrapOnboarded), onStartOnboarding: asyncNoop }),
         vault: fixtureVault,

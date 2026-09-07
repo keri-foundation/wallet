@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FortWeb live hosted onboarding drive</title>
+</head>
+<body>
+    <h1>FortWeb live hosted onboarding drive</h1>
+    <!-- Register the LOCAL vendored pyodide as the page default so PyScript
+         core's eager default-interpreter preload never reaches the jsdelivr CDN
+         (keeps the live run on local runtime only). -->
+    <script type="py-config">
+    {
+        "interpreters": [
+            {
+                "src": "http://127.0.0.1:4183/fortweb/vendor/pyodide/0.29.3/pyodide.mjs",
+                "name": "pyodide-default",
+                "lang": "python"
+            }
+        ]
+    }
+    </script>
+    <pre id="status">IDLE</pre>
+    <pre id="result">(none)</pre>
+    <script type="module" src="./live-drive.js"></script>
+</body>
+</html>

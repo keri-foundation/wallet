@@ -2,6 +2,16 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
     testDir: './playwright',
+    // The OOBI deterministic / restart / live suites are opt-in via their own
+    // dedicated configs (playwright.oobi.config.ts, playwright.oobi-restart.
+    // config.ts, playwright.live.config.ts). They need a built runtime on a
+    // dedicated port (or live DigitalOcean), so they are excluded from the
+    // default CI Playwright run.
+    testIgnore: [
+        '**/oobi-bridge.spec.ts',
+        '**/oobi-restart.spec.ts',
+        '**/live-hosted-onboarding.spec.ts',
+    ],
     fullyParallel: false,
     workers: process.env['CI'] ? 1 : undefined,
     retries: process.env['CI'] ? 1 : 0,

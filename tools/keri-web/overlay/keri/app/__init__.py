@@ -1,0 +1,185 @@
+# -*- encoding: utf-8 -*-
+"""
+KERI
+keri.app package
+"""
+
+import importlib
+
+
+_MODULES = {
+    "agenting": ".agenting",
+    "apping": ".apping",
+    "challenging": ".challenging",
+    "configing": ".configing",
+    "delegating": ".delegating",
+    "directing": ".directing",
+    "forwarding": ".forwarding",
+    "grouping": ".grouping",
+    "habbing": ".habbing",
+    "httping": ".httping",
+    "indirecting": ".indirecting",
+    "keeping": ".keeping",
+    "notifying": ".notifying",
+    "oobiing": ".oobiing",
+    "organizing": ".organizing",
+    "querying": ".querying",
+    "signaling": ".signaling",
+    "signing": ".signing",
+    "specing": ".specing",
+    "storing": ".storing",
+    "watching": ".watching",
+    "webkeeping": ".webkeeping",
+}
+
+_EXPORTS = {
+    "Receiptor": (".agenting", "Receiptor"),
+    "WitnessReceiptor": (".agenting", "WitnessReceiptor"),
+    "WitnessInquisitor": (".agenting", "WitnessInquisitor"),
+    "WitnessPublisher": (".agenting", "WitnessPublisher"),
+    "TCPMessenger": (".agenting", "TCPMessenger"),
+    "TCPStreamMessenger": (".agenting", "TCPStreamMessenger"),
+    "HTTPMessenger": (".agenting", "HTTPMessenger"),
+    "HTTPStreamMessenger": (".agenting", "HTTPStreamMessenger"),
+    "mailbox": (".agenting", "mailbox"),
+    "messenger": (".agenting", "messenger"),
+    "messengerFrom": (".agenting", "messengerFrom"),
+    "streamMessengerFrom": (".agenting", "streamMessengerFrom"),
+    "httpClient": (".agenting", "httpClient"),
+    "schemes": (".agenting", "schemes"),
+    "Consoler": (".apping", "Consoler"),
+    "ChallengeHandler": (".challenging", "ChallengeHandler"),
+    "openCF": (".configing", "openCF"),
+    "Configer": (".configing", "Configer"),
+    "ConfigerDoer": (".configing", "ConfigerDoer"),
+    "Anchorer": (".delegating", "Anchorer"),
+    "DelegateRequestHandler": (".delegating", "DelegateRequestHandler"),
+    "delegateRequestExn": (".delegating", "delegateRequestExn"),
+    "Director": (".directing", "Director"),
+    "Reactor": (".directing", "Reactor"),
+    "Directant": (".directing", "Directant"),
+    "Reactant": (".directing", "Reactant"),
+    "runController": (".directing", "runController"),
+    "Poster": (".forwarding", "Poster"),
+    "StreamPoster": (".forwarding", "StreamPoster"),
+    "ForwardHandler": (".forwarding", "ForwardHandler"),
+    "introduce": (".forwarding", "introduce"),
+    "Counselor": (".grouping", "Counselor"),
+    "MultisigNotificationHandler": (".grouping", "MultisigNotificationHandler"),
+    "multisigInceptExn": (".grouping", "multisigInceptExn"),
+    "multisigRotateExn": (".grouping", "multisigRotateExn"),
+    "multisigInteractExn": (".grouping", "multisigInteractExn"),
+    "multisigRegistryInceptExn": (".grouping", "multisigRegistryInceptExn"),
+    "multisigIssueExn": (".grouping", "multisigIssueExn"),
+    "multisigRevokeExn": (".grouping", "multisigRevokeExn"),
+    "multisigRpyExn": (".grouping", "multisigRpyExn"),
+    "multisigExn": (".grouping", "multisigExn"),
+    "getEscrowedEvent": (".grouping", "getEscrowedEvent"),
+    "Multiplexor": (".grouping", "Multiplexor"),
+    "openHby": (".habbing", "openHby"),
+    "openHab": (".habbing", "openHab"),
+    "Habery": (".habbing", "Habery"),
+    "Signator": (".habbing", "Signator"),
+    "HaberyDoer": (".habbing", "HaberyDoer"),
+    "SIGNER": (".habbing", "SIGNER"),
+    "BaseHab": (".habbing", "BaseHab"),
+    "Hab": (".habbing", "Hab"),
+    "SignifyHab": (".habbing", "SignifyHab"),
+    "SignifyGroupHab": (".habbing", "SignifyGroupHab"),
+    "GroupHab": (".habbing", "GroupHab"),
+    "SignatureValidationComponent": (".httping", "SignatureValidationComponent"),
+    "CesrRequest": (".httping", "CesrRequest"),
+    "CESR_CONTENT_TYPE": (".httping", "CESR_CONTENT_TYPE"),
+    "parseCesrHttpRequest": (".httping", "parseCesrHttpRequest"),
+    "createCESRRequest": (".httping", "createCESRRequest"),
+    "streamCESRRequests": (".httping", "streamCESRRequests"),
+    "Clienter": (".httping", "Clienter"),
+    "CESR_DESTINATION_HEADER": (".httping", "CESR_DESTINATION_HEADER"),
+    "setupWitness": (".indirecting", "setupWitness"),
+    "createHttpServer": (".indirecting", "createHttpServer"),
+    "WitnessStart": (".indirecting", "WitnessStart"),
+    "Indirector": (".indirecting", "Indirector"),
+    "MailboxDirector": (".indirecting", "MailboxDirector"),
+    "Poller": (".indirecting", "Poller"),
+    "HttpEnd": (".indirecting", "HttpEnd"),
+    "QryRpyMailboxIterable": (".indirecting", "QryRpyMailboxIterable"),
+    "MailboxIterable": (".indirecting", "MailboxIterable"),
+    "ReceiptEnd": (".indirecting", "ReceiptEnd"),
+    "QueryEnd": (".indirecting", "QueryEnd"),
+    "PubLot": (".keeping", "PubLot"),
+    "PreSit": (".keeping", "PreSit"),
+    "PrePrm": (".keeping", "PrePrm"),
+    "PubSet": (".keeping", "PubSet"),
+    "riKey": (".keeping", "riKey"),
+    "openKS": (".keeping", "openKS"),
+    "Keeper": (".keeping", "Keeper"),
+    "KeeperDoer": (".keeping", "KeeperDoer"),
+    "Creator": (".keeping", "Creator"),
+    "RandyCreator": (".keeping", "RandyCreator"),
+    "SaltyCreator": (".keeping", "SaltyCreator"),
+    "Creatory": (".keeping", "Creatory"),
+    "Initage": (".keeping", "Initage"),
+    "Manager": (".keeping", "Manager"),
+    "ManagerDoer": (".keeping", "ManagerDoer"),
+    "Algos": (".keeping", "Algos"),
+    "notice": (".notifying", "notice"),
+    "Notice": (".notifying", "Notice"),
+    "DicterSuber": (".notifying", "DicterSuber"),
+    "Noter": (".notifying", "Noter"),
+    "Notifier": (".notifying", "Notifier"),
+    "OobiResource": (".oobiing", "OobiResource"),
+    "OobiRequestHandler": (".oobiing", "OobiRequestHandler"),
+    "oobiRequestExn": (".oobiing", "oobiRequestExn"),
+    "Oobiery": (".oobiing", "Oobiery"),
+    "Authenticator": (".oobiing", "Authenticator"),
+    "Result": (".oobiing", "Result"),
+    "BaseOrganizer": (".organizing", "BaseOrganizer"),
+    "Organizer": (".organizing", "Organizer"),
+    "IdentifierOrganizer": (".organizing", "IdentifierOrganizer"),
+    "QueryDoer": (".querying", "QueryDoer"),
+    "KeyStateNoticer": (".querying", "KeyStateNoticer"),
+    "LogQuerier": (".querying", "LogQuerier"),
+    "SeqNoQuerier": (".querying", "SeqNoQuerier"),
+    "AnchorQuerier": (".querying", "AnchorQuerier"),
+    "signal": (".signaling", "signal"),
+    "Signal": (".signaling", "Signal"),
+    "Signaler": (".signaling", "Signaler"),
+    "SignalsEnd": (".signaling", "SignalsEnd"),
+    "SignalIterable": (".signaling", "SignalIterable"),
+    "serialize": (".signing", "serialize"),
+    "signPaths": (".signing", "signPaths"),
+    "transSeal": (".signing", "transSeal"),
+    "SpecResource": (".specing", "SpecResource"),
+    "Mailboxer": (".storing", "Mailboxer"),
+    "Respondant": (".storing", "Respondant"),
+    "logger": (".watching", "logger"),
+    "Stateage": (".watching", "Stateage"),
+    "States": (".watching", "States"),
+    "DiffState": (".watching", "DiffState"),
+    "Adjudicator": (".watching", "Adjudicator"),
+    "AdjudicationDoer": (".watching", "AdjudicationDoer"),
+    "diffState": (".watching", "diffState"),
+    "WebKeeper": (".webkeeping", "WebKeeper"),
+}
+
+__all__ = [*_MODULES, *_EXPORTS]
+
+
+def __getattr__(name):
+    if name in _MODULES:
+        module = importlib.import_module(_MODULES[name], __name__)
+        globals()[name] = module
+        return module
+
+    if name in _EXPORTS:
+        module_name, export_name = _EXPORTS[name]
+        module = importlib.import_module(module_name, __name__)
+        value = getattr(module, export_name)
+        globals()[name] = value
+        return value
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
