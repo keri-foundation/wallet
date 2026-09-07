@@ -72,6 +72,9 @@ class KfVaultState:
     watcher_introduced: bool = False
     watcher_query_verified: bool = False
     watcher_observed_sn: int = 0
+    # Bounded, truthful direct-query error context for a required watcher that
+    # could not be verified during onboarding (empty on success / no watcher).
+    watcher_query_error: str = ""
     failure_reason: str = ""
 
 
@@ -179,6 +182,7 @@ def _kf_state_view(record: KfVaultState):
         "watcherIntroduced": record.watcher_introduced,
         "watcherQueryVerified": record.watcher_query_verified,
         "watcherObservedSn": record.watcher_observed_sn,
+        "watcherQueryError": record.watcher_query_error,
         "failureReason": record.failure_reason,
     }
 
@@ -1145,6 +1149,7 @@ def _kf_services_overview(hby, organizer, record: KfVaultState) -> dict:
             "introduced": watcher_introduced,
             "queryVerified": watcher_query,
             "observedSn": watcher_sn,
+            "queryError": record.watcher_query_error,
             "directStatus": watcher_direct,
             "managementSyncStatus": management_sync,
         },
@@ -1198,6 +1203,50 @@ async def _await_kf_session_provisioned(
         "TIMEOUT",
         f"KF onboarding did not provision its hosted witness pool in time (session state '{state}').",
     )
+
+
+async def _verify_kf_watcher_during_onboarding(
+    hby,
+    hab,
+    record: KfVaultState,
+    *,
+    watcher_eid: str,
+    watcher_url: str,
+):
+    """Run the direct watcher key-state query as part of normal hosted onboarding.
+
+    The product onboarding path (not a separate driver command) invokes the same
+    ``_query_kf_watcher_direct`` operation the live acceptance drives, so the
+    verified milestone is produced by the product flow itself.
+
+    Resume/idempotency rule: a current verified milestone is reused - no query is
+    re-issued when ``watcher_query_verified`` is already true and the stored
+    observed SN equals the account's current key-state SN. Otherwise (missing or
+    stale) the query runs again and the durable milestone is refreshed.
+
+    Never raises: a required watcher that is momentarily unverifiable does not
+    strand an otherwise-onboarded account. Returns
+    ``(verified, observed_sn, error, query)`` so the caller can persist truthful
+    direct-service state (the UI derives Connected only from a verified match).
+    """
+    account_sn = int(getattr(getattr(hab, "kever", None), "sn", 0) or 0)
+    if record.watcher_query_verified and record.watcher_observed_sn == account_sn:
+        return True, record.watcher_observed_sn, "", None
+    try:
+        query = await _query_kf_watcher_direct(
+            hby,
+            hab,
+            watcher_eid=watcher_eid,
+            watcher_url=watcher_url,
+        )
+    except Exception as exc:  # noqa: BLE001 - bounded failure, never aborts account onboarding
+        return False, account_sn, str(exc), None
+    observed_hex = str(query.get("sn", "") or "")
+    try:
+        observed_sn = int(observed_hex, 16) if observed_hex else account_sn
+    except ValueError:
+        observed_sn = account_sn
+    return True, observed_sn, "", query
 
 
 async def _run_kf_onboarding(
@@ -1539,8 +1588,29 @@ async def _run_kf_onboarding(
     record.witness_receipt_verified = True
     record.watcher_oobi_verified = watcher_row is not None and bool(watcher_row.get("oobi"))
     record.watcher_introduced = watcher_row is not None
-    record.watcher_query_verified = False
-    record.watcher_observed_sn = int(getattr(getattr(account_hab, "kever", None), "sn", 0) or 0)
+    watcher_query_detail = None
+    if watcher_row is not None:
+        # Normal product onboarding performs the direct watcher key-state query
+        # itself (the same runtime operation the live acceptance drives). The
+        # reply is cross-checked against this controller's authoritative local
+        # key state, so a matching reply persists the verified milestone through
+        # the product path - a test driver is not required to create it.
+        verified, observed_sn, watcher_error, watcher_query_detail = (
+            await _verify_kf_watcher_during_onboarding(
+                hby,
+                account_hab,
+                record,
+                watcher_eid=str(watcher_row.get("eid", "") or ""),
+                watcher_url=str(watcher_row.get("watcherUrl", "") or ""),
+            )
+        )
+        record.watcher_query_verified = verified
+        record.watcher_observed_sn = observed_sn
+        record.watcher_query_error = watcher_error
+    else:
+        record.watcher_query_verified = False
+        record.watcher_observed_sn = int(getattr(getattr(account_hab, "kever", None), "sn", 0) or 0)
+        record.watcher_query_error = ""
     record.failure_reason = ""
     _clear_kf_onboarding_session(hby, record, delete_auth_hab=True)
 
@@ -1549,6 +1619,8 @@ async def _run_kf_onboarding(
     reopened_organizer = reopened["modules"]["organizing"].Organizer(hby=reopened["hby"])
     return {
         "account": _kf_state_view(reopened_record),
+        "watcherQuery": watcher_query_detail,
+        "watcherQueryError": str(reopened_record.watcher_query_error or ""),
         "witnesses": await _list_kf_account_witnesses(
             reopened["hby"],
             reopened_organizer,

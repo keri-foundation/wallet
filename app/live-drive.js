@@ -141,33 +141,29 @@ async function __liveRun() {
             step("watchers.status", !!(res.watcherStatus && res.watcherStatus.eid), res.watcherStatus);
         }
 
-        // ---- DIRECT watcher USE: controller-signed KERI ksn query over :7633 ----
-        if (res.watcherEid && res.watcherUrl) {
-            try {
-                const watQuery = await bridge.request(
-                    "kf.account.watchers.query",
-                    { vaultId: vault.id, watcherEid: res.watcherEid, watcherUrl: res.watcherUrl },
-                    90_000,
-                    "live watchers.query (direct ksn over :7633)",
-                );
-                res.watcherQuery = watQuery.watcher || {};
-                const wq = res.watcherQuery;
-                const queryOk = !!(
-                    wq.replySaid &&
-                    wq.protocolMajor === 2 &&
-                    wq.controller === res.accountAid &&
-                    wq.sn === "1"
-                );
-                res.queryOk = queryOk;
-                step("watchers.query DIRECT (HTTP 200, KERI v2, sn=1)", queryOk, wq);
-            } catch (queryErr) {
-                res.watcherQueryError = String((queryErr && queryErr.message) || queryErr).slice(0, 1200);
-                res.queryOk = false;
-                step("watchers.query DIRECT (HTTP 200, KERI v2, sn=1)", false, res.watcherQueryError);
-            }
+        // ---- DIRECT watcher USE is produced by NORMAL product onboarding ----
+        // kf.onboarding.start already performed the controller-signed KERI ksn
+        // query over :7633 and persisted the verified milestone. The driver only
+        // OBSERVES the product-produced result; it must not be the component that
+        // creates the milestone (DRIVER_QUERY_REQUIRED_FOR_SUCCESS = NO).
+        const wq = (onboard && onboard.watcherQuery) || {};
+        res.watcherQuery = wq;
+        if (wq && wq.replySaid) {
+            const queryOk = !!(
+                wq.replySaid &&
+                wq.protocolMajor === 2 &&
+                wq.controller === res.accountAid &&
+                wq.sn === "1"
+            );
+            res.queryOk = queryOk;
+            step("watcher query verified during product onboarding (KERI v2, sn=1)", queryOk, wq);
         } else {
+            const productError =
+                (onboard && (onboard.watcherQueryError || (onboard.account || {}).watcherQueryError)) ||
+                "product onboarding did not produce a verified watcher query";
+            res.watcherQueryError = String(productError).slice(0, 1200);
             res.queryOk = false;
-            step("watchers.query DIRECT (HTTP 200, KERI v2, sn=1)", false, { reason: "no watcher eid/url" });
+            step("watcher query verified during product onboarding (KERI v2, sn=1)", false, res.watcherQueryError);
         }
 
         // ---- normalized domain view model (UI boundary): kf.services.overview ----
