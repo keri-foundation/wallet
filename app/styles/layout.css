@@ -60,6 +60,10 @@
     display: none;
 }
 
+.topbar__menu img {
+    filter: brightness(0) invert(1);
+}
+
 .shell__body {
     flex: 1;
     min-height: calc(100dvh - var(--topbar-height));
@@ -264,11 +268,13 @@
         transition: transform 180ms ease;
         z-index: 19;
         pointer-events: none;
+        visibility: hidden;
     }
 
     .lk-sidebar-shell.is-open {
         transform: translateX(0);
         pointer-events: auto;
+        visibility: visible;
     }
 
     .lk-sidebar {

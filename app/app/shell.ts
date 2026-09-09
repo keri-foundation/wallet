@@ -194,7 +194,7 @@ export function renderShell(root: HTMLElement, { route, page, state, vault, acti
                         : ""}
                     <a class="topbar__brand-link" href="${homeHref()}">
                         <img src="./assets/brand/SymbolLogo.svg" alt="">
-                        <span class="topbar__title">Locksmith</span>
+                        <span class="topbar__title">FortWeb</span>
                     </a>
                 </div>
                 <div class="topbar__actions" role="toolbar" aria-label="Shell actions">
@@ -242,7 +242,7 @@ export function renderShell(root: HTMLElement, { route, page, state, vault, acti
     } else {
         pageRoot.innerHTML = page.html || "";
     }
-    document.title = `${page.title} | Locksmith`;
+    document.title = `${page.title} | FortWeb`;
 
     root.querySelectorAll("[data-action='toggle-nav']").forEach((button) => {
         button.addEventListener("click", () => actions.toggleNav?.());

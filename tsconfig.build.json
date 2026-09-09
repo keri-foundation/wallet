@@ -43,6 +43,8 @@
     "app/ui/primitives/chip.ts",
     "app/runtime/global-handlers.ts",
     "app/runtime/logger.ts",
+    "app/runtime/runtime-config.ts",
+    "app/runtime/runtime-package-base.ts",
     "app/runtime/types/**/*.d.ts",
     "app/runtime/bridge.ts",
     "app/runtime/origin-contract.ts",

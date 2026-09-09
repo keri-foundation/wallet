@@ -4,9 +4,14 @@ Wallet for KERI. This is the universal web wallet based on Python running in the
 
 ## Local development (browser)
 
-Pyodide and wheels are loaded from URLs like `/fortweb/vendor/...` and `/fortweb/wheels/...`. The HTTP **document root must be the parent of the `fortweb` directory** (in this workspace, that is usually `libs/`).
+Pyodide is selected by `pyscript-ci.toml`. The `[fort_runtime_packages]`
+manifest selects the reviewed wheel set and its relative artifact paths. The
+HTTP **document root must be the parent of the `fortweb` directory** (in this
+workspace, that is usually `libs/`).
 
-Do **not** open only `http://127.0.0.1:8765/` against a server rooted at `fortweb/app` — you will see MIME type errors (`core.js` blocked as `text/html`) because `/vendor/...` 404s and returns HTML.
+Do **not** open only `http://127.0.0.1:8765/` against a server rooted at
+`fortweb/app`. Configured runtime paths resolve from the FortWeb application
+base, so a narrower document root returns HTML 404 pages for runtime modules.
 
 From the `fortweb` repo:
 
@@ -27,10 +32,72 @@ This does **not** change the browser runtime path, bundling model, or local serv
 From the `fortweb` repo:
 
 ```bash
+export FORTWEB_RUNTIME_SOURCE_MANIFEST=path/to/pyodide-314-wheelhouse/manifest.json
+export FORTWEB_RUNTIME_SOURCE_MANIFEST_SHA256=<reviewed-manifest-sha256>
 npm run build:runtime
 npm run typecheck
 npm run test:e2e
 ```
+
+The source manifest must remain inside the repository and match the reviewed
+Pyodide 314 wheelhouse manifest. The builder does not use private execution
+state as an implicit source input.
+
+CI and clean checkouts acquire the runtime source from an explicit HTTPS archive:
+
+```bash
+python3 scripts/acquire_runtime_source.py \
+  --url "$FORTWEB_RUNTIME_SOURCE_URL" \
+  --sha256 "$FORTWEB_RUNTIME_SOURCE_ARCHIVE_SHA256" \
+  --manifest-sha256 "$FORTWEB_RUNTIME_SOURCE_MANIFEST_SHA256" \
+  --output build/runtime-source
+export FORTWEB_RUNTIME_SOURCE_MANIFEST=build/runtime-source/manifest.json
+```
+
+The archive must contain the reviewed manifest plus its `runtime/` and
+`wheelhouse/` inputs. The acquisition command verifies the archive digest, the
+explicit manifest digest, and every selected runtime and wheel artifact before
+the builder can use it.
+
+## Offline runtime package
+
+FortWeb packages the verified runtime as three products:
+
+```text
+fortweb-runtime-0.0.0.zip
+fortweb-runtime-0.0.0.zip.sha256
+fortweb-release.json
+```
+
+Build a product from the selected source manifest and verified runtime:
+
+```bash
+npm run package:runtime -- --python python3 --output-dir dist/package
+```
+
+The command recompiles the current TypeScript for comparison, verifies every
+runtime file, and records source and dependency provenance. Output directories
+must be new. Serve an extracted product without source fallback:
+
+```bash
+python3 scripts/serve_local.py --runtime-dir /absolute/extracted/fortweb-runtime --port 8765 --no-open
+```
+
+Verify an existing product directory with:
+
+```bash
+npm run verify:runtime-package -- --product-dir path/to/product
+```
+
+The verifier checks the external product set, ZIP structure, manifest,
+checksums, file inventory, provenance, and release metadata. A local package
+remains unpublished and unattested. Importer success does not prove a mobile
+runtime, an iOS archive, an Android APK or AAB, publication, deployment,
+release, or shipping.
+
+See [the package contract](docs/runtime-package-contract.md),
+[the Pyodide 314 wheel and runtime build](docs/pyodide-314-wheel-build.md), and
+[the source and consumer lineage](docs/runtime-package-lineage.md).
 
 ## Browser smoke tests
 
@@ -48,6 +115,13 @@ From the `fortweb` repo:
 ```bash
 npm run test:e2e
 ```
+
+This command runs only the application smoke suite through `serve_local.py`.
+The runtime canary, lifecycle, and source-wheelhouse suites use
+`playwright.runtime.config.ts`. They require the matching
+`serve_runtime_browser.py` mode and explicit runtime, inventory, source, and
+evidence paths. The runtime workflow shows the complete CI invocation for each
+suite.
 
 Current smoke coverage:
 

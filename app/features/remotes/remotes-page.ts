@@ -64,9 +64,9 @@ function createResolveRemoteDialog(onResolveRemote: RemotesPageProps["onResolveR
         title: "Add Remote Identifier",
         body: `
             <form data-resolve-remote-form>
-                ${fieldTextHtml({ id: "resolve-oobi-url", label: "Blind OOBI URL", placeholder: "https://...", required: true })}
+                ${fieldTextHtml({ id: "resolve-oobi-url", label: "OOBI URL", placeholder: "https://...", required: true })}
                 ${fieldTextHtml({ id: "resolve-alias", label: "Alias", placeholder: "e.g. remote-peer" })}
-                <p class="muted">Blind OOBI connect is the only enabled add path in this slice. File import remains deferred.</p>
+                <p class="muted">Enter the OOBI URL shared by the identifier's controller or provider.</p>
                 <p class="status-line" data-resolve-remote-status></p>
             </form>
         `,
@@ -229,7 +229,7 @@ export function renderRemotesPage({
             ${chipHtml({ label: "Transferable", selected: filter === "transferable", dataValue: "transferable" })}
             ${chipHtml({ label: "Non-transferable", selected: filter === "non-transferable", dataValue: "non-transferable" })}
         </div>
-        <p class="lk-table-header__note">Connect by blind OOBI only. File import remains deferred in this slice.</p>
+        <p class="lk-table-header__note">Connect to a remote identifier using its OOBI URL.</p>
     `;
 
     const columns = [
@@ -256,7 +256,7 @@ export function renderRemotesPage({
         ],
         itemsPerPage: 10,
         emptyTitle: "No Remote Identifiers Yet",
-        emptyText: "Add a remote identifier by resolving a blind OOBI from this route.",
+        emptyText: "Add a remote identifier by resolving its OOBI URL.",
         onAdd() {
             createResolveRemoteDialog(onResolveRemote);
         },

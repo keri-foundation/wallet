@@ -576,8 +576,12 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    z-index: 31;
     pointer-events: none;
+}
+
+.lk-table td.mono {
+    white-space: nowrap;
+    word-break: normal;
 }
 
 .unlock-stage__splash {

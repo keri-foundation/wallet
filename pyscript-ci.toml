@@ -1,6 +1,11 @@
-interpreter = "/fortweb/vendor/pyodide/0.29.3/pyodide.mjs"
+interpreter = "./vendor/pyodide/314.0.5/pyodide.mjs"
+
+[fort_runtime_packages]
+manifest = "./runtime-closure.json"
+sha256 = "__RUNTIME_CLOSURE_SHA256__"
 
 [files]
+"./app/runtime/runtime_packages.py" = "./runtime_packages.py"
 "./app/runtime/vaulting.py" = "./vaulting.py"
 "./app/runtime/transporting.py" = "./transporting.py"
 "./app/runtime/onboarding.py" = "./onboarding.py"

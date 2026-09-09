@@ -1,0 +1,83 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 8e2dc51..146833d 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,9 +1,9 @@
+ [project]
+-name = "pychloride"
+-version = "0.7.18.1"
+-description = "Pyodide-compatible ctypes interface for libsodium (refactored pysodium)"
+-readme = "README.md"
+-license = { file = "LICENSE" }
++name = "pysodium"
++version = "0.7.18"
++description = "Pyodide-compatible ctypes interface for libsodium"
++readme = { text = "Pyodide-compatible pysodium built from the WebOfTrust pychloride compatibility source.", content-type = "text/plain" }
++license = "BSD-2-Clause"
+ license-files = ["LICENSE", "THIRD_PARTY_LICENSES.md"]
+ requires-python = ">=3.9"
+ authors = [
+@@ -13,7 +13,6 @@ authors = [
+ keywords = ["cryptography", "API", "NaCl", "libsodium", "pyodide", "wasm"]
+ classifiers = [
+     "Development Status :: 4 - Beta",
+-    "License :: OSI Approved :: BSD License",
+     "Topic :: Security :: Cryptography",
+     "Topic :: Security",
+     "Programming Language :: Python :: 3",
+@@ -37,17 +36,16 @@ dev = [
+ package = true
+ 
+ [build-system]
+-requires = ["hatchling"]
+-build-backend = "hatchling.build"
++requires = ["setuptools==83.0.0", "wheel==0.47.0"]
++build-backend = "setuptools.build_meta"
+ 
+-[tool.hatch.build.targets.wheel]
+-packages = ["src/pychloride"]
++[tool.setuptools]
++packages = ["pysodium"]
++package-dir = { pysodium = "src/pychloride" }
++include-package-data = true
+ 
+-[tool.hatch.build.targets.wheel.sources]
+-"src" = ""
+-
+-[tool.hatch.build.targets.wheel.force-include]
+-"src/pychloride/libsodium.so" = "pychloride/libsodium.so"
++[tool.setuptools.package-data]
++pysodium = ["libsodium.so"]
+ 
+ # 
+ # BUILD & PUBLISH GUIDE (uv)
+diff --git a/setup.py b/setup.py
+new file mode 100644
+index 0000000..0ad95de
+--- /dev/null
++++ b/setup.py
+@@ -0,0 +1,24 @@
++from setuptools import setup
++from setuptools.dist import Distribution
++from wheel.bdist_wheel import bdist_wheel
++
++
++class BinaryDistribution(Distribution):
++    """Install the Python package in the wheel's platform root."""
++
++    def has_ext_modules(self):
++        return True
++
++
++class PyEmscriptenWheel(bdist_wheel):
++    """Mark the bundled libsodium side module as platform-specific."""
++
++    def finalize_options(self):
++        super().finalize_options()
++        self.root_is_pure = False
++
++    def get_tag(self):
++        return "py3", "none", "pyemscripten_2026_0_wasm32"
++
++
++setup(cmdclass={"bdist_wheel": PyEmscriptenWheel}, distclass=BinaryDistribution)

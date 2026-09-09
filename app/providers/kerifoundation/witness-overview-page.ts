@@ -210,8 +210,7 @@ function renderOnboardingPage({
                     <div>
                         <h1>Witnesses</h1>
                         <p>
-                            Fortweb now treats the witness route as the first real KERI Foundation entrypoint:
-                            boot connectivity, hosted onboarding, and the hosted witness list all live here.
+                            Set up your KERI Foundation account and view its hosted witnesses.
                         </p>
                     </div>
                 </header>
@@ -230,7 +229,7 @@ function renderOnboardingPage({
                 <div class="panel__title">
                     <h2>Boot Connection</h2>
                     <p class="muted">
-                        Fortweb talks to the boot service, hosted witnesses, and hosted watchers through the local same-origin dev proxy.
+                        Connect to a boot service to view available witness profiles.
                     </p>
                 </div>
                 <dl class="detail-grid">
@@ -264,7 +263,7 @@ function renderOnboardingPage({
                 <div class="panel__title">
                     <h2>Hosted Onboarding</h2>
                     <p class="muted">
-                        Fortweb keeps the hidden ephemeral onboarding identifier inside the worker and only persists the permanent account AID after the hosted run completes.
+                        Create an account with hosted witnesses and a watcher.
                     </p>
                 </div>
                 <form class="lk-form-stack" data-kf-onboarding-form>
@@ -275,7 +274,7 @@ function renderOnboardingPage({
                         <select class="kf-select" id="kf-witness-profile" name="witnessProfileCode" data-kf-profile-select></select>
                     </div>
                     <p class="muted">
-                        Fortweb v1 creates or reuses one permanent local KF account AID for this vault. It does not expose raw witness boot servers or the hidden ephemeral onboarding AID in the shell.
+                        This vault uses one KERI Foundation account. If setup stops, return here to continue.
                     </p>
                     <div class="panel__actions">
                         <button class="button button--secondary" type="button" data-kf-refresh-bootstrap>Check Boot Connection</button>

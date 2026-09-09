@@ -1,15 +1,28 @@
 {
   "name": "fortweb",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build:runtime": "node tools/build-runtime.mjs",
+    "build:runtime-source": "python3 scripts/build_runtime_source.py",
+    "package:runtime": "node tools/package-runtime.mjs",
+    "verify:runtime-package": "node tools/verify-runtime-package.mjs",
+    "test:runtime-safe-output": "node --test tools/runtime-safe-output.test.mjs",
+    "test:runtime-closure": "node --test tools/runtime-closure.test.mjs",
+    "test:runtime-package-base": "node --test tools/runtime-package-base.test.mjs",
+    "test:runtime-python-contracts": "PYTHONDONTWRITEBYTECODE=1 .venv-pyodide-314/bin/python -m unittest python/test_acquire_runtime_source.py python/test_onboarding.py python/test_runtime_packages.py python/test_verify_runtime_tree.py python/test_serve_runtime_browser.py",
+    "test:python-dependency-closure": "node --test tools/python-dependency-closure.test.mjs",
+    "test:build-idempotency": "node --test tools/build-idempotency.test.mjs",
     "check:runtime-js": "node tools/check-runtime-js.mjs",
     "test:runtime-js-check": "node --test tools/check-runtime-js.test.mjs",
     "typecheck": "tsc --project tsconfig.json",
     "pretest:e2e": "npm run build:runtime",
-    "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e": "playwright test playwright/fortweb-empty-error-states.spec.ts playwright/fortweb-route-acceptance.spec.ts playwright/fortweb-runtime-origin-missing.spec.ts playwright/fortweb-sidebar-behavior.spec.ts playwright/fortweb-smoke.spec.ts",
+    "test:e2e:runtime-canary": "playwright test --config=playwright.runtime.config.ts playwright/runtime-canary.spec.ts",
+    "test:e2e:runtime-lifecycle": "playwright test --config=playwright.runtime.config.ts playwright/webbaser-lifecycle.spec.ts",
+    "test:e2e:wheelhouse": "playwright test --config=playwright.runtime.config.ts playwright/pyodide-314-wheelhouse.spec.ts",
+    "test:e2e:headed": "npm run test:e2e -- --headed"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

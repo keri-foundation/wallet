@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from collections import deque
 from dataclasses import dataclass
 from inspect import isawaitable
 from urllib.parse import urljoin, urlparse
@@ -11,6 +13,10 @@ import vaulting
 
 
 _CONFIG: dict = {}
+
+CESR_CONTENT_TYPE = "application/cesr"
+CESR_ATTACHMENT_HEADER = "CESR-ATTACHMENT"
+CESR_DESTINATION_HEADER = "CESR-DESTINATION"
 
 
 def configure_runtime(
@@ -138,7 +144,9 @@ def proxy_url(url: str):
         return url
 
     parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
+    if (parsed.scheme not in {"http", "https"}
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.port is None):
         return url
 
     origin = _CONFIG["origin"]()
@@ -156,19 +164,100 @@ def proxy_url(url: str):
     return proxied
 
 
-def install_browser_clienter_proxy(httping):
-    clienter = getattr(httping, "Clienter", None)
-    if clienter is None or getattr(clienter, "_fortweb_proxy_patch", False):
-        return
+class BrowserClient:
+    """Response queue for one browser HTTP request."""
 
-    original_request = clienter.request
+    def __init__(self, url):
+        self.url = url
+        self.responses = deque()
+        self.task = None
 
-    def proxied_request(self, method, url, body=None, headers=None):
-        request_url = proxy_url(url) if self._useBrowserFetch(url) else url
-        return original_request(self, method, request_url, body=body, headers=headers)
 
-    clienter.request = proxied_request
-    clienter._fortweb_proxy_patch = True
+class BrowserClienter:
+    """FortWeb HTTP client adapter for keripy OOBI resolution."""
+
+    def __init__(self):
+        self.clients = []
+
+    def request(self, method, url, body=None, headers=None):
+        request_headers = {}
+        for key, value in (headers or {}).items():
+            if isinstance(value, memoryview):
+                value = bytes(value)
+            if isinstance(value, (bytes, bytearray)):
+                value = bytes(value).decode("utf-8")
+            request_headers[str(key)] = str(value)
+
+        if isinstance(body, memoryview):
+            body = bytes(body)
+        if isinstance(body, (bytes, bytearray)):
+            body = bytes(body).decode("utf-8")
+
+        client = BrowserClient(url=url)
+        client.task = asyncio.get_running_loop().create_task(
+            self._request(
+                client,
+                method=method,
+                url=url,
+                body=body,
+                headers=request_headers,
+            )
+        )
+        self.clients.append(client)
+        return client
+
+    def remove(self, client):
+        if client in self.clients:
+            self.clients.remove(client)
+        if client.task is not None and not client.task.done():
+            client.task.cancel()
+
+    async def _request(self, client, *, method, url, body, headers):
+        try:
+            response = await fetch_response(
+                url,
+                method=method,
+                headers=headers,
+                body=body,
+                timeout_ms=_CONFIG["cesr_timeout_ms"],
+            )
+            content_type = (
+                response.headers.get("Content-Type")
+                or response.headers.get("content-type")
+                or ""
+            )
+            aid = response.headers.get("KERI-AID") or response.headers.get("keri-aid") or ""
+            response_headers = {"Content-Type": str(content_type)}
+            if aid:
+                response_headers["KERI-AID"] = str(aid)
+
+            client.responses.append(
+                dict(
+                    version=None,
+                    status=int(response.status),
+                    reason=str(getattr(response, "statusText", "") or ""),
+                    headers=response_headers,
+                    body=await response_bytes(response),
+                    data=None,
+                    request=dict(method=method, url=url),
+                    errored=False,
+                    error=None,
+                )
+            )
+        except Exception as ex:
+            client.responses.append(
+                dict(
+                    version=None,
+                    status=599,
+                    reason="Browser fetch failed",
+                    headers={"Content-Type": "text/plain"},
+                    body=str(ex).encode("utf-8"),
+                    data=None,
+                    request=dict(method=method, url=url),
+                    errored=True,
+                    error=ex,
+                )
+            )
 
 
 def _js_error_name(exc):
@@ -417,15 +506,14 @@ async def post_cesr(
     method: str = "POST",
     timeout_ms: int | None = None,
 ):
-    modules = vaulting.load_modules()
     headers = {
-        "Content-Type": str(getattr(modules["httping"], "CESR_CONTENT_TYPE", "") or "application/cesr"),
+        "Content-Type": CESR_CONTENT_TYPE,
         "Content-Length": str(len(body)),
     }
     if attachment:
-        headers[modules["httping"].CESR_ATTACHMENT_HEADER] = bytes(attachment).decode("utf-8")
+        headers[CESR_ATTACHMENT_HEADER] = bytes(attachment).decode("utf-8")
     if destination:
-        headers[modules["httping"].CESR_DESTINATION_HEADER] = destination
+        headers[CESR_DESTINATION_HEADER] = destination
 
     response = await fetch_response(
         url,
@@ -438,7 +526,7 @@ async def post_cesr(
     if int(response.status) >= 400:
         detail = raw_bytes.decode("utf-8", errors="ignore").strip() or f"HTTP {response.status}"
         raise vaulting.RuntimeFault("NETWORK_ERROR", f"{detail} from {url}")
-    attachment_header = str(response.headers.get(modules["httping"].CESR_ATTACHMENT_HEADER) or "")
+    attachment_header = str(response.headers.get(CESR_ATTACHMENT_HEADER) or "")
     return raw_bytes, attachment_header
 
 
@@ -450,14 +538,13 @@ async def post_cesr_stream(
     method: str = "PUT",
     timeout_ms: int | None = None,
 ):
-    modules = vaulting.load_modules()
     raw = bytes(ims)
     headers = {
-        "Content-Type": str(getattr(modules["httping"], "CESR_CONTENT_TYPE", "") or "application/cesr"),
+        "Content-Type": CESR_CONTENT_TYPE,
         "Content-Length": str(len(raw)),
     }
     if destination:
-        headers[modules["httping"].CESR_DESTINATION_HEADER] = destination
+        headers[CESR_DESTINATION_HEADER] = destination
 
     response = await fetch_response(
         url,
@@ -473,18 +560,16 @@ async def post_cesr_stream(
     return raw_bytes
 
 
-def _consume_cesr_reply(parser, *, ims: bytearray, kvy, rvy, exc):
+def _consume_cesr_reply(parser, *, ims: bytearray):
     if len(_split_cesr_stream(ims)) > _CONFIG["reply_message_limit"]:
         raise vaulting.RuntimeFault("BAD_RESPONSE", "KF service reply exceeded the maximum supported message count.")
     steps = 0
 
     while ims:
         remaining = len(ims)
-        parsator = parser.msgParsator(
+        parsator = parser.onceParsator(
             ims=ims,
-            kvy=kvy,
-            rvy=rvy,
-            exc=exc,
+            framed=False,
             local=False,
         )
 
@@ -542,7 +627,7 @@ def parse_cesr_reply(
         hby,
         version=_kf_reply_parser_version(ims),
     )
-    _consume_cesr_reply(parser, ims=bytearray(ims), kvy=kvy, rvy=rvy, exc=exc)
+    _consume_cesr_reply(parser, ims=bytearray(ims))
     kvy.processEscrows()
 
     last = serders[-1]
@@ -601,7 +686,9 @@ def _iter_surface_keystate_messages(*, hab, start_sn: int, end_sn: int):
         messages[sn] = raw
 
     for sn in range(start_sn, end_sn + 1):
-        yield sn, messages.get(sn, bytes(hab.makeOwnEvent(sn=sn)))
+        msg_own_event = getattr(hab, "msgOwnEvent", None)
+        msg = msg_own_event(sn=sn) if callable(msg_own_event) else hab.makeOwnEvent(sn=sn)
+        yield sn, messages.get(sn, bytes(msg))
 
 
 async def _ensure_surface_keystate(hab, *, surface_name: str, surface_url: str, destination: str = ""):
@@ -635,6 +722,45 @@ async def send_kf_event(url: str, msg, *, destination: str = "", timeout_ms: int
     )
 
 
+def _make_exchange_serder(modules, *, sender: str, destination: str, route: str, payload: dict):
+    version = modules["kering"].Vrsn_2_0
+    exchange = getattr(modules["eventing"], "exchange", None)
+    if callable(exchange):
+        return (
+            exchange(
+                sender=sender,
+                receiver=destination or "",
+                route=route,
+                attributes=dict(payload),
+                version=version,
+                pvrsn=version,
+                gvrsn=version,
+                kind=modules["kering"].Kinds.json,
+            ),
+            bytearray(),
+        )
+
+    legacy_exchange = getattr(modules["exchanging"], "exchange", None)
+    if callable(legacy_exchange):
+        return legacy_exchange(
+            route=route,
+            payload=dict(payload),
+            sender=sender,
+            recipient=destination or None,
+        )
+
+    raise vaulting.RuntimeFault("RUNTIME_ERROR", "keripy exchange message constructor is unavailable.")
+
+
+def _endorse_exchange(hab, *, serder):
+    try:
+        return hab.endorse(serder=serder, last=False, framed=False)
+    except TypeError as exc:
+        if "framed" not in str(exc):
+            raise
+        return hab.endorse(serder=serder, last=False, pipelined=False)
+
+
 async def send_kf_exn(
     hby,
     hab,
@@ -649,20 +775,21 @@ async def send_kf_exn(
     timeout_ms: int | None = None,
 ):
     modules = vaulting.load_modules()
-    if surface_name == "account":
+    if surface_name:
         await _ensure_surface_keystate(
             hab,
             surface_name=surface_name,
             surface_url=surface_url,
             destination=destination,
         )
-    serder, end = modules["exchanging"].exchange(
+    serder, end = _make_exchange_serder(
+        modules,
         route=route,
         payload=payload,
         sender=hab.pre,
-        recipient=destination or None,
+        destination=destination,
     )
-    ims = hab.endorse(serder=serder, last=False, pipelined=False)
+    ims = _endorse_exchange(hab, serder=serder)
     attachment = bytearray(ims)
     del attachment[:serder.size]
     if end:

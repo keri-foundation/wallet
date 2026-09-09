@@ -2,16 +2,19 @@ import { PyWorker, type PyWorkerHandle } from "../../vendor/pyscript/2025.11.2/c
 import { parse as parseToml } from "../../vendor/pyscript/2025.11.2/toml-BK2RWy-G.js";
 import { createRuntimeRequest, isRuntimeResponse, type RuntimeResponse } from "./messages.js";
 import { postLog, postLifecycle } from "./logger.js";
+import { fetchRuntimeConfig } from "./runtime-config.js";
 import {
     describeRuntimeOriginContract,
     type FortRuntimeOriginContractV1,
 } from "./origin-contract.js";
 
 const WORKER_DIAGNOSTIC_KIND = "fortweb.runtime.diagnostic";
+const WORKER_RPC_PROBE = "fortweb.runtime.rpc.probe";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const WORKER_LIVENESS_TIMEOUT_MS = 3_000;
+const WORKER_RPC_READY_TIMEOUT_MS = 180_000;
+const WORKER_RPC_RETRY_INITIAL_MS = 10;
+const WORKER_RPC_RETRY_MAX_MS = 250;
 const BACKGROUND_STALE_THRESHOLD_MS = 30_000;
-const PRELOAD_MAX_MS = 300_000;
 const METHOD_TIMEOUT_MS: Record<string, number> = {
     "vaults.create": 120_000,
     "vaults.open": 90_000,
@@ -22,16 +25,28 @@ const METHOD_TIMEOUT_MS: Record<string, number> = {
 
 type RuntimeBridgeError = Error & { code?: string; cause?: unknown };
 
-interface PreloadGate {
-    promise: Promise<string | undefined>;
-    resolve: (reason?: string) => void;
-}
-
 interface WorkerDiagnostic {
     event: string;
     level?: string;
     fields: Record<string, unknown>;
 }
+
+interface WorkerRawResponse {
+    worker: PyWorkerHandle;
+    response: unknown;
+}
+
+type RuntimeWorkerFactory = (
+    workerUrl: string,
+    options: {
+        type: string;
+        configURL: string;
+        config: unknown;
+        version: string;
+    },
+) => Promise<PyWorkerHandle>;
+
+const createPyWorker = PyWorker as unknown as RuntimeWorkerFactory;
 
 interface RuntimeBridgeOptions {
     workerUrl: URL | string;
@@ -79,21 +94,6 @@ function resolveTimeoutMs(method: string, timeoutMs?: number): number {
     }
 
     return METHOD_TIMEOUT_MS[method] ?? DEFAULT_REQUEST_TIMEOUT_MS;
-}
-
-function createPreloadGate(): PreloadGate {
-    let settled = false;
-    let resolveGate: (reason?: string) => void = () => {};
-    const promise = new Promise<string | undefined>((resolve) => {
-        resolveGate = (reason?: string) => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            resolve(reason);
-        };
-    });
-    return { promise, resolve: resolveGate };
 }
 
 function withTimeout<T>(promise: Promise<T> | T, timeoutMs: number, method: string): Promise<T> {
@@ -168,53 +168,62 @@ function parseWorkerDiagnostic(rawPayload: unknown): WorkerDiagnostic | null {
 export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContract = null }: RuntimeBridgeOptions): RuntimeBridge {
     let requestCounter = 0;
     let bootedWorker: PyWorkerHandle | null = null;
+    let promisedWorker: PyWorkerHandle | null = null;
+    let rpcReadyWorker: PyWorkerHandle | null = null;
     let workerPromise: Promise<PyWorkerHandle> | null = null;
+    let workerGeneration = 0;
     let hiddenSince = 0;
-    let preloadGate = createPreloadGate();
+    let destroyed = false;
+    const terminatedWorkers = new WeakSet<PyWorkerHandle>();
 
-    function resetPreloadGate(): void {
-        preloadGate = createPreloadGate();
-    }
-
-    function resolvePreloadGate(reason = "resolved"): void {
-        preloadGate.resolve(reason);
-    }
-
-    async function waitForPreloadReady(): Promise<void> {
-        await Promise.race([
-            preloadGate.promise,
-            new Promise<never>((_, reject) => {
-                window.setTimeout(() => {
-                    reject(createRuntimeBridgeError("Worker preload timed out.", "TIMEOUT"));
-                }, PRELOAD_MAX_MS);
-            }),
-        ]);
+    function terminateWorker(worker: PyWorkerHandle): void {
+        if (terminatedWorkers.has(worker)) {
+            return;
+        }
+        terminatedWorkers.add(worker);
+        worker.terminate?.();
     }
 
     function createWorkerPromise(): Promise<PyWorkerHandle> {
-        resetPreloadGate();
-        return (async () => {
-            console.time("[bridge] worker boot");
+        workerGeneration += 1;
+        const promise = (async () => {
             postLifecycle("boot");
 
             try {
                 const workerUrlString = workerUrl.toString();
                 const configUrlString = configUrl.toString();
-                const response = await fetch(configUrlString);
+                const { packageBase, response } = await fetchRuntimeConfig(
+                    configUrlString,
+                    window.location.href,
+                );
                 if (!response.ok) {
                     throw new Error(`Unable to load runtime config from ${configUrlString}.`);
                 }
 
                 const config = parseToml(await response.text()) as Record<string, unknown>;
+                const configuredVersion = config.version ?? config.interpreter;
+                if (typeof configuredVersion !== "string" || configuredVersion.length === 0) {
+                    throw new Error(`Runtime config ${configUrlString} does not specify an interpreter.`);
+                }
+                const runtimeVersion = new URL(
+                    configuredVersion,
+                    new URL(configUrlString, window.location.href),
+                ).href;
+                const packageConfig = config.fort_runtime_packages;
+                if (!packageConfig || typeof packageConfig !== "object" || Array.isArray(packageConfig)) {
+                    throw new Error(`Runtime config ${configUrlString} does not specify fort_runtime_packages.`);
+                }
+                (packageConfig as Record<string, unknown>).package_base = packageBase;
                 if (runtimeOriginContract) {
                     config.fort_runtime_origin = runtimeOriginContract;
                     postLog("runtime_origin_contract_forwarded", describeRuntimeOriginContract(runtimeOriginContract));
                 }
 
-                const worker = await PyWorker(workerUrlString, {
+                const worker = await createPyWorker(workerUrlString, {
                     type: "pyodide",
                     configURL: configUrlString,
                     config,
+                    version: runtimeVersion,
                 });
                 postLifecycle("ready");
                 return worker;
@@ -222,27 +231,51 @@ export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContrac
                 postLifecycle("error", {
                     reason: getErrorMessage(error),
                 });
-                resolvePreloadGate("js_boot_error");
                 throw error;
-            } finally {
-                console.timeEnd("[bridge] worker boot");
             }
         })();
+        promise.then(
+            (worker) => {
+                if (workerPromise !== promise) {
+                    terminateWorker(worker);
+                    return;
+                }
+                promisedWorker = worker;
+                attachWorkerHandlers(worker);
+            },
+            () => {},
+        );
+        return promise;
     }
 
     workerPromise = createWorkerPromise();
 
-    function invalidateWorker(reason: string, fields: Record<string, unknown> = {}): void {
+    function invalidateWorker(
+        reason: string,
+        fields: Record<string, unknown> = {},
+        expectedWorker: PyWorkerHandle | null = null,
+    ): void {
+        if (expectedWorker && expectedWorker !== bootedWorker && expectedWorker !== promisedWorker) {
+            terminateWorker(expectedWorker);
+            return;
+        }
+
         postLog("worker_invalidation", {
             level: "warning",
             reason,
             ...fields,
         });
 
-        if (bootedWorker) {
-            console.warn(`[bridge] invalidating worker: ${reason}`);
-            bootedWorker = null;
-        }
+        const invalidatedPromise = workerPromise;
+        bootedWorker = null;
+        promisedWorker = null;
+        rpcReadyWorker = null;
+        workerPromise = null;
+        workerGeneration += 1;
+        void invalidatedPromise?.then(
+            terminateWorker,
+            () => {},
+        );
     }
 
     function attachWorkerHandlers(worker: PyWorkerHandle): void {
@@ -257,79 +290,112 @@ export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContrac
                     level: diagnostic.level ?? "info",
                     ...diagnostic.fields,
                 });
-                if (
-                    diagnostic.event === "worker_preload_complete" ||
-                    diagnostic.event === "worker_preload_failed"
-                ) {
-                    resolvePreloadGate(diagnostic.event);
-                }
             });
         }
 
         worker.onerror = (event: { message?: string } | unknown) => {
-            console.error("[bridge] worker error:", event && typeof event === "object" && "message" in event ? event.message : event);
             postLifecycle("error", {
                 reason: event && typeof event === "object" && "message" in event && typeof event.message === "string"
                     ? event.message
                     : String(event),
             });
-            resolvePreloadGate("worker_error");
-            invalidateWorker("worker error event");
+            invalidateWorker("worker error event", {}, worker);
         };
         worker.onmessageerror = () => {
-            console.error("[bridge] worker message deserialization error");
             postLifecycle("error", {
                 reason: "worker message deserialization error",
             });
-            resolvePreloadGate("worker_message_error");
-            invalidateWorker("message error event");
+            invalidateWorker("message error event", {}, worker);
         };
     }
 
-    workerPromise.then(attachWorkerHandlers, () => {});
+    async function waitForWorkerRpc(worker: PyWorkerHandle): Promise<void> {
+        const deadline = performance.now() + WORKER_RPC_READY_TIMEOUT_MS;
+        let lastError: unknown = null;
+        let retryDelayMs = WORKER_RPC_RETRY_INITIAL_MS;
 
-    async function bootFreshWorker(timeoutMs: number): Promise<PyWorkerHandle> {
-        workerPromise = createWorkerPromise();
-        workerPromise.then(attachWorkerHandlers, () => {});
-        bootedWorker = await withTimeout(workerPromise, timeoutMs, "worker boot");
-        return bootedWorker;
+        while (performance.now() < deadline) {
+            try {
+                const remainingMs = Math.max(1, deadline - performance.now());
+                const response = await withTimeout(
+                    worker.sync.handle_request(WORKER_RPC_PROBE),
+                    remainingMs,
+                    "worker RPC readiness probe",
+                );
+                if (response === WORKER_RPC_PROBE) {
+                    return;
+                }
+                const parsed = parseRuntimeResponse(response);
+                if (
+                    parsed
+                    && typeof parsed === "object"
+                    && "kind" in parsed
+                    && parsed.kind === "fortweb.runtime.rpc.probe.error"
+                ) {
+                    const code = "code" in parsed && typeof parsed.code === "string"
+                        ? parsed.code
+                        : "RUNTIME_ERROR";
+                    const message = "message" in parsed && typeof parsed.message === "string"
+                        ? parsed.message
+                        : "Runtime worker preload failed.";
+                    throw createRuntimeBridgeError(message, code);
+                }
+            } catch (error) {
+                if (getErrorCode(error, "")) {
+                    throw error;
+                }
+                lastError = error;
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, retryDelayMs));
+            retryDelayMs = Math.min(retryDelayMs * 2, WORKER_RPC_RETRY_MAX_MS);
+        }
+
+        throw createRuntimeBridgeError(
+            "Runtime worker RPC did not become ready.",
+            "RUNTIME_ERROR",
+            lastError,
+        );
     }
 
     async function getWorker(timeoutMs: number): Promise<PyWorkerHandle> {
+        if (destroyed) {
+            throw createRuntimeBridgeError("Runtime bridge was destroyed.", "RUNTIME_ERROR");
+        }
+
         if (!bootedWorker) {
+            if (!workerPromise) {
+                workerPromise = createWorkerPromise();
+            }
+            const pendingWorker = workerPromise;
+            const pendingGeneration = workerGeneration;
             try {
-                if (!workerPromise) {
-                    workerPromise = createWorkerPromise();
-                    workerPromise.then(attachWorkerHandlers, () => {});
+                const worker = await withTimeout(pendingWorker, timeoutMs, "worker boot");
+                if (workerPromise !== pendingWorker || workerGeneration !== pendingGeneration) {
+                    throw createRuntimeBridgeError("Runtime worker was invalidated during boot.", "RUNTIME_ERROR");
                 }
-                bootedWorker = await withTimeout(workerPromise, timeoutMs, "worker boot");
+                bootedWorker = worker;
             } catch (error) {
-                console.warn("[bridge] initial worker promise failed, booting fresh worker:", getErrorMessage(error));
-                bootedWorker = await bootFreshWorker(timeoutMs);
+                if (workerPromise === pendingWorker) {
+                    invalidateWorker("worker boot failed", {
+                        reason_detail: getErrorMessage(error),
+                    });
+                }
+                throw error;
             }
         }
 
-        await waitForPreloadReady();
-        return bootedWorker;
-    }
-
-    async function checkWorkerLiveness(worker: PyWorkerHandle): Promise<boolean> {
-        const pingId = `ping-${Date.now()}`;
-        const pingPayload = JSON.stringify({
-            id: pingId,
-            kind: "fortweb.runtime.request",
-            method: "settings.get",
-            params: {},
-        });
-        try {
-            console.time("[bridge] liveness check");
-            await withTimeout(worker.sync.handle_request(pingPayload), WORKER_LIVENESS_TIMEOUT_MS, "liveness check");
-            console.timeEnd("[bridge] liveness check");
-            return true;
-        } catch {
-            console.timeEnd("[bridge] liveness check");
-            return false;
+        if (rpcReadyWorker !== bootedWorker) {
+            try {
+                await waitForWorkerRpc(bootedWorker);
+            } catch (error) {
+                invalidateWorker("worker RPC readiness failed", {
+                    reason_detail: getErrorMessage(error),
+                }, bootedWorker);
+                throw error;
+            }
+            rpcReadyWorker = bootedWorker;
         }
+        return bootedWorker;
     }
 
     function onVisibilityChange(): void {
@@ -346,16 +412,37 @@ export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContrac
 
     document.addEventListener("visibilitychange", onVisibilityChange);
 
-    async function rawRequest(rawPayload: string, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, label = "raw runtime request"): Promise<unknown> {
+    async function sendRawRequest(
+        rawPayload: string,
+        timeoutMs: number,
+        label: string,
+    ): Promise<WorkerRawResponse> {
         if (typeof rawPayload !== "string") {
             throw new Error("Runtime raw request payload must be a string.");
         }
 
         const worker = await getWorker(timeoutMs);
-        console.time(`[bridge] ${label}`);
-        const rawResponse = await withTimeout(worker.sync.handle_request(rawPayload), timeoutMs, label);
-        console.timeEnd(`[bridge] ${label}`);
-        return parseRuntimeResponse(rawResponse);
+        try {
+            const rawResponse = await withTimeout(worker.sync.handle_request(rawPayload), timeoutMs, label);
+            return {
+                worker,
+                response: parseRuntimeResponse(rawResponse),
+            };
+        } catch (error) {
+            if (getErrorCode(error, "RUNTIME_ERROR") === "TIMEOUT") {
+                invalidateWorker("request timeout", { label }, worker);
+            }
+            throw error;
+        }
+    }
+
+    async function rawRequest(
+        rawPayload: string,
+        timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+        label = "raw runtime request",
+    ): Promise<unknown> {
+        const result = await sendRawRequest(rawPayload, timeoutMs, label);
+        return result.response;
     }
 
     async function request<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -376,7 +463,7 @@ export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContrac
         });
 
         try {
-            const response = await rawRequest(payload, effectiveTimeoutMs, method);
+            const { response } = await sendRawRequest(payload, effectiveTimeoutMs, method);
             const result = handleResponse(response, id) as T;
             postLog("request_end", {
                 level: "info",
@@ -387,81 +474,25 @@ export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContrac
             });
             return result;
         } catch (firstError) {
-            if (getErrorCode(firstError, "RUNTIME_ERROR") !== "TIMEOUT") {
-                postLog("terminal_failure", {
-                    level: "error",
+            const code = getErrorCode(firstError, "RUNTIME_ERROR");
+            if (code === "TIMEOUT") {
+                postLog("request_timeout", {
+                    level: "warning",
                     method,
                     request_id: id,
-                    code: getErrorCode(firstError, "RUNTIME_ERROR"),
-                    message: getErrorMessage(firstError),
-                    duration_ms: roundDurationMs(startedAt),
+                    timeout_ms: effectiveTimeoutMs,
                 });
-                throw firstError;
             }
 
-            console.warn(`[bridge] ${method} timed out, checking worker liveness`);
-            postLog("request_timeout", {
-                level: "warning",
+            postLog("terminal_failure", {
+                level: "error",
                 method,
                 request_id: id,
-                timeout_ms: effectiveTimeoutMs,
+                code,
+                message: getErrorMessage(firstError),
+                duration_ms: roundDurationMs(startedAt),
             });
-            const worker = await getWorker(effectiveTimeoutMs);
-            const alive = await checkWorkerLiveness(worker);
-
-            if (alive) {
-                postLog("terminal_failure", {
-                    level: "error",
-                    method,
-                    request_id: id,
-                    code: getErrorCode(firstError, "TIMEOUT"),
-                    message: getErrorMessage(firstError),
-                    duration_ms: roundDurationMs(startedAt),
-                });
-                throw firstError;
-            }
-
-            console.warn(`[bridge] worker is dead after timeout, booting fresh worker and retrying ${method}`);
-            invalidateWorker("dead after timeout", {
-                request_id: id,
-                method,
-            });
-            await bootFreshWorker(effectiveTimeoutMs);
-
-            const retryId = `runtime-${Date.now()}-${requestCounter++}`;
-            const retryPayload = JSON.stringify(createRuntimeRequest(retryId, method, params));
-            postLog("request_retry", {
-                level: "warning",
-                method,
-                request_id: id,
-                retry_request_id: retryId,
-                reason: "dead_after_timeout",
-            });
-
-            try {
-                const retryResponse = await rawRequest(retryPayload, effectiveTimeoutMs, method);
-                const retryResult = handleResponse(retryResponse, retryId) as T;
-                postLog("request_end", {
-                    level: "info",
-                    method,
-                    request_id: retryId,
-                    prior_request_id: id,
-                    outcome: "ok",
-                    duration_ms: roundDurationMs(startedAt),
-                });
-                return retryResult;
-            } catch (retryError) {
-                postLog("terminal_failure", {
-                    level: "error",
-                    method,
-                    request_id: retryId,
-                    prior_request_id: id,
-                    code: getErrorCode(retryError, "RUNTIME_ERROR"),
-                    message: getErrorMessage(retryError),
-                    duration_ms: roundDurationMs(startedAt),
-                });
-                throw retryError;
-            }
+            throw firstError;
         }
     }
 
@@ -488,10 +519,9 @@ export function createRuntimeBridge({ workerUrl, configUrl, runtimeOriginContrac
         request,
         rawRequest,
         destroy(): void {
+            destroyed = true;
             document.removeEventListener("visibilitychange", onVisibilityChange);
-            void workerPromise?.then((worker) => {
-                worker.terminate?.();
-            });
+            invalidateWorker("bridge destroyed");
         },
     };
 }

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>FortWeb WebBaser v2 WebBaser</title>
+</head>
+<body>
+    <h1>FortWeb WebBaser v2 WebBaser</h1>
+    <pre id="status">booting</pre>
+    <script type="module">
+        import { PyWorker } from "/fortweb/vendor/pyscript/2025.11.2/core.js";
+        import { parse as parseToml } from "/fortweb/vendor/pyscript/2025.11.2/toml-BK2RWy-G.js";
+
+        const workerUrl = "/_runtime-test/python/run_webbaser_lifecycle.py";
+        const configUrl = "/fortweb/pyscript-ci.toml";
+        const readyProbe = "fortweb.webbaser.ready";
+        const readyTimeoutMs = 10_000;
+        let activeWorker = null;
+        let bootCount = 0;
+        let terminateCount = 0;
+
+        async function waitForWorkerReady(worker) {
+            const deadline = performance.now() + readyTimeoutMs;
+            let lastError = null;
+            while (performance.now() < deadline) {
+                try {
+                    const raw = await worker.sync.run_phase(JSON.stringify({ phase: "probe" }));
+                    const result = JSON.parse(raw);
+                    if (result.ok === true && result.ready === readyProbe) {
+                        return;
+                    }
+                    lastError = new Error("WebBaser worker returned an invalid readiness probe response");
+                } catch (error) {
+                    lastError = error;
+                }
+                await new Promise((resolve) => window.setTimeout(resolve, 10));
+            }
+            throw new Error(`WebBaser worker RPC did not become ready: ${String(lastError)}`);
+        }
+
+        window.webbaserHarness = {
+            async boot() {
+                if (activeWorker) {
+                    throw new Error("WebBaser worker is already active");
+                }
+                const response = await fetch(configUrl);
+                if (!response.ok) {
+                    throw new Error(`Unable to fetch ${configUrl}: HTTP ${response.status}`);
+                }
+                const config = parseToml(await response.text());
+                const absoluteConfigUrl = new URL(configUrl, window.location.href);
+                config.interpreter = new URL(String(config.interpreter), absoluteConfigUrl).href;
+                config.fort_runtime_packages.package_base = new URL(".", absoluteConfigUrl).href;
+                const worker = await PyWorker(workerUrl, {
+                    type: "pyodide",
+                    configURL: configUrl,
+                    config,
+                    version: config.interpreter,
+                });
+                try {
+                    await waitForWorkerReady(worker);
+                } catch (error) {
+                    worker.terminate();
+                    throw error;
+                }
+                activeWorker = worker;
+                bootCount += 1;
+                return { bootCount };
+            },
+
+            async run(request) {
+                if (!activeWorker) {
+                    throw new Error("WebBaser worker is not active");
+                }
+                const raw = await activeWorker.sync.run_phase(JSON.stringify(request));
+                return JSON.parse(raw);
+            },
+
+            terminate() {
+                if (!activeWorker) {
+                    throw new Error("WebBaser worker is not active");
+                }
+                activeWorker.terminate();
+                activeWorker = null;
+                terminateCount += 1;
+                return { terminateCount };
+            },
+
+            counters() {
+                return { bootCount, terminateCount, active: Boolean(activeWorker) };
+            },
+        };
+        document.querySelector("#status").textContent = "ready";
+        window.webbaserHarnessReady = true;
+    </script>
+</body>
+</html>

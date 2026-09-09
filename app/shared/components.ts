@@ -43,6 +43,7 @@ interface VaultDrawerController<Vault extends VaultDrawerRecord> {
     el: HTMLDivElement;
     open(): void;
     close(): void;
+    readonly isOpen: boolean;
     refresh(vaults: Vault[]): void;
 }
 
@@ -196,6 +197,7 @@ export function createVaultDrawer<Vault extends VaultDrawerRecord>(opts: VaultDr
     }
 
     let isOpen = false;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
 
     function renderList(nextVaults: Vault[]): void {
         list.replaceChildren(
@@ -248,6 +250,10 @@ export function createVaultDrawer<Vault extends VaultDrawerRecord>(opts: VaultDr
         if (isOpen) {
             return;
         }
+        if (closeTimer !== undefined) {
+            clearTimeout(closeTimer);
+            closeTimer = undefined;
+        }
         isOpen = true;
         document.body.appendChild(el);
         el.offsetHeight;
@@ -260,7 +266,10 @@ export function createVaultDrawer<Vault extends VaultDrawerRecord>(opts: VaultDr
         }
         isOpen = false;
         el.classList.remove("is-open");
-        setTimeout(() => el.remove(), 300);
+        closeTimer = setTimeout(() => {
+            el.remove();
+            closeTimer = undefined;
+        }, 300);
     }
 
     function refresh(nextVaults: Vault[]): void {
@@ -315,7 +324,7 @@ export function createVaultDrawer<Vault extends VaultDrawerRecord>(opts: VaultDr
 
     renderList(vaults);
 
-    return { el, open, close, refresh };
+    return { el, open, close, refresh, get isOpen() { return isOpen; } };
 }
 
 export function floatingInputHtml({ label, name, type = "text", password = false }: FloatingInputOptions): string {

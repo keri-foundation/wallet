@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -168,6 +169,34 @@ def _select_account_option(snapshot: dict, code: str):
     return None
 
 
+def _session_state(payload: dict) -> str:
+    return str(payload.get("state", "") or "")
+
+
+def _raise_for_closed_session(hby, payload: dict, record: KfVaultState):
+    session_state = _session_state(payload)
+    if session_state not in {"failed", "cancelled", "expired"}:
+        return
+
+    failure_reason = str(payload.get("failure_reason", "") or "").strip()
+    _clear_kf_onboarding_session(hby, record, delete_auth_hab=True)
+    raise vaulting.RuntimeFault(
+        "CONFLICT",
+        failure_reason or f"The saved KF onboarding session is {session_state}.",
+    )
+
+
+def _raise_for_failed_provisioning(payload: dict):
+    operation = payload.get("session_provision_operation")
+    if not isinstance(operation, dict) or str(operation.get("state", "") or "") != "failed":
+        return
+
+    raise vaulting.RuntimeFault(
+        "CONFLICT",
+        str(operation.get("last_error", "") or "Hosted resource provisioning failed for this session."),
+    )
+
+
 def _require_kf_account_hab(hby, record: KfVaultState):
     if record.status != "onboarded" or not record.account_aid:
         raise vaulting.RuntimeFault("CONFLICT", "This vault does not have an onboarded KERI Foundation account yet.")
@@ -221,19 +250,43 @@ def _create_or_load_kf_account_hab(hby, record: KfVaultState, *, alias: str, req
     )
 
 
-def _validate_kf_account_witness_profile(hab, *, witness_eids: list[str], toad: int):
+def _validate_kf_account_witness_profile(
+    hab,
+    *,
+    witness_eids: list[str],
+    toad: int,
+    allow_reconfiguration: bool = False,
+):
     existing_wits = list(getattr(getattr(hab, "kever", None), "wits", []) or [])
     existing_toad = getattr(getattr(getattr(hab, "kever", None), "toader", None), "num", None)
-    if existing_wits and (set(existing_wits) != set(witness_eids) or len(existing_wits) != len(witness_eids)):
+    if (
+        existing_wits
+        and not allow_reconfiguration
+        and (set(existing_wits) != set(witness_eids) or len(existing_wits) != len(witness_eids))
+    ):
         raise vaulting.RuntimeFault(
             "CONFLICT",
             "The existing permanent account AID does not match the allocated hosted witness pool.",
         )
-    if existing_wits and existing_toad is not None and toad and existing_toad != toad:
+    if existing_wits and not allow_reconfiguration and existing_toad is not None and toad and existing_toad != toad:
         raise vaulting.RuntimeFault(
             "CONFLICT",
             "The existing permanent account AID does not match the allocated witness threshold.",
         )
+
+
+def _msg_own_event(hab, *, sn: int):
+    msg_own_event = getattr(hab, "msgOwnEvent", None)
+    if callable(msg_own_event):
+        return msg_own_event(sn=sn)
+    return hab.makeOwnEvent(sn=sn)
+
+
+def _msg_own_inception(hab):
+    msg_own_inception = getattr(hab, "msgOwnInception", None)
+    if callable(msg_own_inception):
+        return msg_own_inception()
+    return hab.makeOwnInception()
 
 
 def _iter_hab_kel_messages(hab):
@@ -246,9 +299,12 @@ def _iter_hab_kel_messages(hab):
             continue
         messages[sn] = raw
 
-    last_sn = int(getattr(getattr(hab, "kever", None), "sn", -1) or -1)
+    last_sn = int(getattr(getattr(hab, "kever", None), "sn", -1))
     for sn in range(last_sn + 1):
-        yield messages.get(sn, bytes(hab.makeOwnEvent(sn=sn)))
+        if sn in messages:
+            yield messages[sn]
+        else:
+            yield bytes(_msg_own_event(hab, sn=sn))
 
 
 def _totp_code(seed: str, *, period: int = 30, digits: int = 6) -> str:
@@ -269,6 +325,93 @@ def _create_totp_uri(secret: str, *, vault_name: str, issuer: str = "KERI Founda
     label = quote(f"{issuer}:{vault_name}", safe="")
     query = urlencode({"secret": secret, "issuer": issuer})
     return f"otpauth://totp/{label}?{query}"
+
+
+def _witness_rows_from_payload(payload: dict, snapshot: dict):
+    witness_rows = []
+    for entry in payload.get("witnesses", []):
+        if not isinstance(entry, dict):
+            continue
+        witness_rows.append(
+            {
+                "eid": str(entry.get("eid", "") or ""),
+                "name": str(entry.get("name", "") or ""),
+                "witnessUrl": str(entry.get("witness_url") or entry.get("url") or ""),
+                "bootUrl": str(entry.get("boot_url", "") or ""),
+                "oobi": vaulting.pick_oobi(entry),
+                "regionId": str(entry.get("region_id", "") or snapshot["bootstrap"]["regionId"]),
+                "regionName": str(entry.get("region_name", "") or snapshot["bootstrap"]["regionName"]),
+            }
+        )
+    return witness_rows
+
+
+def _watcher_row_from_payload(payload: dict, snapshot: dict):
+    raw_watcher = payload.get("watcher")
+    if not isinstance(raw_watcher, dict):
+        return None
+
+    return {
+        "eid": str(raw_watcher.get("eid", "") or ""),
+        "name": str(raw_watcher.get("name", "") or ""),
+        "watcherUrl": str(raw_watcher.get("watcher_url") or raw_watcher.get("url") or ""),
+        "oobi": vaulting.pick_oobi(raw_watcher),
+        "regionId": str(raw_watcher.get("region_id", "") or snapshot["bootstrap"]["regionId"]),
+        "regionName": str(raw_watcher.get("region_name", "") or snapshot["bootstrap"]["regionName"]),
+    }
+
+
+async def _await_session_resources(
+    hby,
+    ephemeral_hab,
+    *,
+    surfaces: transporting.KfSurfaceConfig,
+    record: KfVaultState,
+    boot_server_aid: str,
+    start_payload: dict,
+    snapshot: dict,
+    option: dict,
+):
+    payload = start_payload
+    watcher_required = bool(snapshot["bootstrap"]["watcherRequired"])
+    deadline = time.monotonic() + max(float(_CONFIG["cesr_timeout_ms"]) / 1000.0, 1.0)
+
+    while True:
+        _raise_for_closed_session(hby, payload, record)
+        _raise_for_failed_provisioning(payload)
+        witness_rows = _witness_rows_from_payload(payload, snapshot)
+        watcher_row = _watcher_row_from_payload(payload, snapshot)
+        resources_complete = len(witness_rows) == option["witnessCount"] and (
+            not watcher_required or watcher_row is not None
+        )
+        if resources_complete:
+            return boot_server_aid, payload, witness_rows, watcher_row
+
+        if time.monotonic() >= deadline:
+            raise vaulting.RuntimeFault(
+                "TIMEOUT",
+                "Timed out waiting for hosted witness and watcher provisioning.",
+            )
+
+        await asyncio.sleep(0.5)
+        destination = transporting.kf_surface_destination(
+            surfaces,
+            surface_name="onboarding",
+            boot_server_aid=boot_server_aid,
+        )
+        status_reply = await transporting.send_kf_exn(
+            hby,
+            ephemeral_hab,
+            surface_name="onboarding",
+            surface_url=transporting.require_kf_surface_url(surfaces, "onboarding"),
+            route="/onboarding/session/status",
+            payload={"session_id": record.onboarding_session_id},
+            destination=destination,
+            expected_sender=destination or boot_server_aid or "",
+            timeout_ms=_CONFIG["cesr_timeout_ms"],
+        )
+        boot_server_aid = status_reply["sender"] or boot_server_aid
+        payload = status_reply["payload"]
 
 
 def _qr_svg_data_uri(value: str) -> str:
@@ -385,7 +528,10 @@ async def _resolve_kf_oobi(hby, organizer, *, url: str, display_url: str, alias:
     try:
         roobi = await vaulting.await_resolution(
             hby,
-            modules["oobiing"].Oobiery(hby=hby),
+            modules["oobiing"].Oobiery(
+                hby=hby,
+                clienter=transporting.BrowserClienter(),
+            ),
             url,
             expected_aid=expected_aid,
         )
@@ -499,24 +645,89 @@ def _ingest_witness_receipt_fallback(hab, witness: dict, raw_bytes: bytes):
         return False
 
     index = wits.index(witness_eid)
+    version = transporting._kf_reply_parser_version(raw_bytes)
     counter = modules["eventing"].Counter(
         qb64b=ims,
         strip=True,
-        version=transporting._kf_reply_parser_version(raw_bytes),
+        version=version,
     )
-    if counter.name != modules["eventing"].Codens.NonTransReceiptCouples:
-        return False
+
+    attachment_groups = {
+        modules["eventing"].Codens.AttachmentGroup,
+        modules["eventing"].Codens.BigAttachmentGroup,
+    }
+    while counter.name in attachment_groups:
+        group_size = counter.byteCount()
+        if len(ims) < group_size:
+            return False
+        ims = bytearray(ims[:group_size])
+        counter = modules["eventing"].Counter(
+            qb64b=ims,
+            strip=True,
+            version=version,
+        )
+        if counter.name == modules["eventing"].Codens.KERIACDCGenusVersion:
+            version = modules["eventing"].Counter.b64ToVer(counter.countToB64(l=3))
+            counter = modules["eventing"].Counter(
+                qb64b=ims,
+                strip=True,
+                version=version,
+            )
 
     added = False
-    for _ in range(counter.count):
-        verfer = modules["eventing"].Verfer(qb64b=ims, strip=True)
-        cigar = modules["eventing"].Cigar(qb64b=ims, strip=True)
-        if verfer.qb64 != witness_eid:
-            continue
-        if not verfer.verify(cigar.raw, event.raw):
-            continue
-        wiger = modules["eventing"].Siger(raw=cigar.raw, index=index, verfer=verfer)
-        added = hab.db.wigs.add(keys=vaulting.dg_key(hab.pre, said), val=wiger) or added
+    if counter.name == modules["eventing"].Codens.WitnessIdxSigs:
+        if version.major >= 2:
+            group_size = counter.byteCount()
+            if len(ims) < group_size:
+                return False
+            group = ims[:group_size]
+            wigers = []
+            while group:
+                wigers.append(
+                    modules["eventing"].Siger(
+                        qb64b=group,
+                        strip=True,
+                        version=version,
+                    )
+                )
+        else:
+            wigers = [
+                modules["eventing"].Siger(
+                    qb64b=ims,
+                    strip=True,
+                    version=version,
+                )
+                for _ in range(counter.count)
+            ]
+
+        for wiger in wigers:
+            if wiger.index != index:
+                continue
+            verfer = modules["eventing"].Verfer(qb64=witness_eid)
+            if not verfer.verify(wiger.raw, event.raw):
+                continue
+            wiger.verfer = verfer
+            added = hab.db.wigs.add(keys=vaulting.dg_key(hab.pre, said), val=wiger) or added
+
+        return added
+
+    if counter.name == modules["eventing"].Codens.NonTransReceiptCouples:
+        if version.major >= 2:
+            group_size = counter.byteCount()
+            if len(ims) < group_size:
+                return False
+            ims = ims[:group_size]
+            remaining = bool(ims)
+        else:
+            remaining = counter.count
+
+        while remaining:
+            verfer = modules["eventing"].Verfer(qb64b=ims, strip=True, version=version)
+            cigar = modules["eventing"].Cigar(qb64b=ims, strip=True, version=version)
+            if verfer.qb64 == witness_eid and verfer.verify(cigar.raw, event.raw):
+                wiger = modules["eventing"].Siger(raw=cigar.raw, index=index, verfer=verfer)
+                added = hab.db.wigs.add(keys=vaulting.dg_key(hab.pre, said), val=wiger) or added
+            remaining = bool(ims) if version.major >= 2 else remaining - 1
 
     return added
 
@@ -570,7 +781,7 @@ async def _register_with_witness(hab, witness: dict):
     body, boundary = _encode_multipart_form(form_fields)
 
     headers = {
-        vaulting.load_modules()["httping"].CESR_DESTINATION_HEADER: witness["eid"],
+        transporting.CESR_DESTINATION_HEADER: witness["eid"],
         "Content-Type": f"multipart/form-data; boundary={boundary}",
         "Content-Length": str(len(body.encode("utf-8"))),
     }
@@ -611,16 +822,15 @@ async def _register_with_witness(hab, witness: dict):
 
 
 async def _submit_witness_rotation_receipt(hab, witness: dict, auth_header: str, msg: bytes):
-    modules = vaulting.load_modules()
     body, attachment = transporting._split_cesr_message(msg)
     headers = {
-        "Content-Type": str(getattr(modules["httping"], "CESR_CONTENT_TYPE", "") or "application/cesr"),
+        "Content-Type": transporting.CESR_CONTENT_TYPE,
         "Content-Length": str(len(body)),
-        modules["httping"].CESR_DESTINATION_HEADER: witness["eid"],
+        transporting.CESR_DESTINATION_HEADER: witness["eid"],
         "Authorization": auth_header,
     }
     if attachment:
-        headers[modules["httping"].CESR_ATTACHMENT_HEADER] = bytes(attachment).decode("utf-8")
+        headers[transporting.CESR_ATTACHMENT_HEADER] = bytes(attachment).decode("utf-8")
 
     witness_url = urljoin(f"{witness['witnessUrl'].rstrip('/')}/", "/receipts")
     response = await transporting.fetch_response(
@@ -638,7 +848,10 @@ async def _submit_witness_rotation_receipt(hab, witness: dict, auth_header: str,
             f"Witness {witness['eid']} rejected the rotation event: {detail}",
         )
 
-    hab.psr.parseOne(ims=bytearray(raw_bytes))
+    hab.psr.parseOne(
+        ims=bytearray(raw_bytes),
+        version=transporting._kf_reply_parser_version(raw_bytes),
+    )
     if getattr(hab.psr, "kvy", None) is not None:
         hab.psr.kvy.processEscrows()
     if not _get_witness_receipts(hab.db, hab.pre, hab.kever.serder.said):
@@ -647,22 +860,32 @@ async def _submit_witness_rotation_receipt(hab, witness: dict, auth_header: str,
         _ingest_witness_receipt_fallback(hab, witness, raw_bytes)
 
 
-async def _rotate_kf_account_to_witnesses(hab, witnesses: list[dict], *, toad: int):
+async def _rotate_kf_account_to_witnesses(
+    hab,
+    witnesses: list[dict],
+    *,
+    toad: int,
+    allow_reconfiguration: bool = False,
+):
     allocated_wits = [witness["eid"] for witness in witnesses]
     current_wits = list(getattr(getattr(hab, "kever", None), "wits", []) or [])
     current_toad = getattr(getattr(getattr(hab, "kever", None), "toader", None), "num", None)
 
-    if current_wits == allocated_wits and (current_toad is None or current_toad == toad):
-        return
+    already_configured = current_wits == allocated_wits and (current_toad is None or current_toad == toad)
+    if not already_configured:
+        if current_wits and not allow_reconfiguration:
+            raise vaulting.RuntimeFault(
+                "CONFLICT",
+                "The existing permanent account AID already has a different witness configuration.",
+            )
 
-    if current_wits:
-        raise vaulting.RuntimeFault(
-            "CONFLICT",
-            "The existing permanent account AID already has a different witness configuration.",
+        hab.rotate(
+            toad=toad,
+            cuts=[witness for witness in current_wits if witness not in allocated_wits],
+            adds=[witness for witness in allocated_wits if witness not in current_wits],
         )
 
-    hab.rotate(toad=toad, cuts=[], adds=allocated_wits)
-    rotation_msg = bytes(hab.makeOwnEvent(sn=hab.kever.sn))
+    rotation_msg = bytes(_msg_own_event(hab, sn=hab.kever.sn))
 
     for witness in witnesses:
         auth_header = _witness_auth_header(str(witness.get("totpSeed", "") or ""))
@@ -674,6 +897,51 @@ async def _rotate_kf_account_to_witnesses(hab, witnesses: list[dict], *, toad: i
         raise vaulting.RuntimeFault(
             "BAD_RESPONSE",
             f"Insufficient witness receipts after rotation: got {len(wigs)}, need {hab.kever.toader.num}. {detail}",
+        )
+
+    # Match native Receiptor: each witness needs its peers' receipts and endpoints.
+    modules = vaulting.load_modules()
+    event = hab.kever.serder
+    event_wits = list(hab.kever.wits)
+    receipts = {event_wits[wiger.index]: wiger for wiger in wigs}
+    for witness in witnesses:
+        peers = [eid for eid in event_wits if eid != witness["eid"] and eid in receipts]
+        if not peers:
+            continue
+        for eid in peers:
+            for scheme, _ in hab.fetchUrls(eid=eid).firsts():
+                locations = hab.loadLocScheme(eid=eid, scheme=scheme, gvrsn=event.pvrsn)
+                await _send_witness_message(witness, locations)
+        receipt = modules["eventing"].receipt(
+            pre=hab.pre, sn=event.sn, said=event.said,
+            version=event.pvrsn, kind=event.kind,
+        )
+        msg = modules["eventing"].messagize(
+            serder=receipt, wigers=[receipts[eid] for eid in peers],
+            framed=True, gvrsn=event.pvrsn,
+        )
+        await _send_witness_message(witness, msg)
+
+
+async def _send_witness_message(witness: dict, msg):
+    # The witness POST endpoint accepts one event with attachments in its header.
+    body, attachment = transporting._split_cesr_message(msg)
+    headers = {
+        "Content-Type": transporting.CESR_CONTENT_TYPE,
+        "Content-Length": str(len(body)),
+        transporting.CESR_DESTINATION_HEADER: witness["eid"],
+    }
+    if attachment:
+        headers[transporting.CESR_ATTACHMENT_HEADER] = attachment.decode("utf-8")
+    response = await transporting.fetch_response(
+        witness["witnessUrl"], method="POST", headers=headers,
+        body=body.decode("utf-8"), timeout_ms=_CONFIG["cesr_timeout_ms"],
+    )
+    if int(response.status) >= 400:
+        detail = await transporting.response_text(response)
+        raise vaulting.RuntimeFault(
+            "NETWORK_ERROR",
+            f"Witness {witness['eid']} rejected the receipt propagation: {detail or response.status}",
         )
 
 
@@ -692,6 +960,11 @@ async def _introduce_account_to_watcher(hab, watcher: dict, witnesses: list[dict
     watcher_url = str(watcher.get("watcherUrl", "") or watcher.get("url", "") or "")
     if not watcher_eid or not watcher_url:
         raise vaulting.RuntimeFault("CONFLICT", "Hosted watcher allocation did not include a usable endpoint.")
+
+    for witness in witnesses:
+        locations = hab.loadLocScheme(eid=witness["eid"], gvrsn=hab.kever.serder.pvrsn)
+        if locations:
+            await _send_direct_cesr(watcher_url, locations, destination=watcher_eid)
 
     ender = hab.db.ends.get(keys=(hab.pre, "watcher", watcher_eid))
     if not ender or not ender.allowed:
@@ -718,7 +991,7 @@ async def _introduce_account_to_watcher(hab, watcher: dict, witnesses: list[dict
 
 
 def _local_connection_status(hby, organizer, aid: str):
-    if hby.kevers.get(aid) is not None:
+    if aid in hby.kevers:
         return "Connected", "success"
     if organizer.get(aid) is not None:
         return "Stored", "info"
@@ -903,43 +1176,45 @@ async def _run_kf_onboarding(
                 surface_name="onboarding",
                 boot_server_aid=boot_server_aid,
             )
-            start_reply = await transporting.send_kf_exn(
-                hby,
-                ephemeral_hab,
-                surface_name="onboarding",
-                surface_url=transporting.require_kf_surface_url(surfaces, "onboarding"),
-                route="/onboarding/session/status",
-                payload={"session_id": record.onboarding_session_id},
-                destination=destination,
-                expected_sender=destination or boot_server_aid or "",
-                timeout_ms=_CONFIG["cesr_timeout_ms"],
-            )
-            boot_server_aid = start_reply["sender"] or boot_server_aid
-            start_payload = start_reply["payload"]
-            session_state = str(start_payload.get("state", "") or "")
-            if start_payload.get("account_aid") and start_payload["account_aid"] != account_hab.pre:
-                raise vaulting.RuntimeFault(
-                    "CONFLICT",
-                    "The saved KF onboarding session is bound to a different permanent account AID.",
+            try:
+                start_reply = await transporting.send_kf_exn(
+                    hby,
+                    ephemeral_hab,
+                    surface_name="onboarding",
+                    surface_url=transporting.require_kf_surface_url(surfaces, "onboarding"),
+                    route="/onboarding/session/status",
+                    payload={"session_id": record.onboarding_session_id},
+                    destination=destination,
+                    expected_sender=destination or boot_server_aid or "",
+                    timeout_ms=_CONFIG["cesr_timeout_ms"],
                 )
-            if session_state in {"failed", "cancelled", "expired"}:
-                failure_reason = str(start_payload.get("failure_reason", "") or "").strip()
-                _clear_kf_onboarding_session(hby, record, delete_auth_hab=True)
-                raise vaulting.RuntimeFault(
-                    "CONFLICT",
-                    failure_reason or f"The saved KF onboarding session is {session_state}.",
-                )
-        else:
+            except vaulting.RuntimeFault as exc:
+                if "Session not found" not in str(exc):
+                    raise
+                record.onboarding_session_id = ""
+                _save_kf_state(hby, record)
+            else:
+                boot_server_aid = start_reply["sender"] or boot_server_aid
+                start_payload = start_reply["payload"]
+                session_state = str(start_payload.get("state", "") or "")
+                if start_payload.get("account_aid") and start_payload["account_aid"] != account_hab.pre:
+                    raise vaulting.RuntimeFault(
+                        "CONFLICT",
+                        "The saved KF onboarding session is bound to a different permanent account AID.",
+                    )
+                if session_state in {"failed", "cancelled", "expired"}:
+                    failure_reason = str(start_payload.get("failure_reason", "") or "").strip()
+                    _clear_kf_onboarding_session(hby, record, delete_auth_hab=True)
+                    raise vaulting.RuntimeFault(
+                        "CONFLICT",
+                        failure_reason or f"The saved KF onboarding session is {session_state}.",
+                    )
+
+        if not record.onboarding_session_id:
             destination = transporting.kf_surface_destination(
                 surfaces,
                 surface_name="onboarding",
                 boot_server_aid=boot_server_aid,
-            )
-            await transporting.send_kf_event(
-                transporting.require_kf_surface_url(surfaces, "onboarding"),
-                ephemeral_hab.makeOwnInception(),
-                destination=destination,
-                timeout_ms=_CONFIG["cesr_timeout_ms"],
             )
             start_reply = await transporting.send_kf_exn(
                 hby,
@@ -964,31 +1239,21 @@ async def _run_kf_onboarding(
         record.onboarding_auth_alias = getattr(ephemeral_hab, "name", "")
         _save_kf_state(hby, record)
 
-        for entry in start_payload.get("witnesses", []):
-            if not isinstance(entry, dict):
-                continue
-            witness_rows.append(
-                {
-                    "eid": str(entry.get("eid", "") or ""),
-                    "name": str(entry.get("name", "") or ""),
-                    "witnessUrl": str(entry.get("witness_url") or entry.get("url") or ""),
-                    "bootUrl": str(entry.get("boot_url", "") or ""),
-                    "oobi": vaulting.pick_oobi(entry),
-                    "regionId": str(entry.get("region_id", "") or snapshot["bootstrap"]["regionId"]),
-                    "regionName": str(entry.get("region_name", "") or snapshot["bootstrap"]["regionName"]),
-                }
-            )
+        if not record.onboarding_session_id:
+            raise vaulting.RuntimeFault("BAD_RESPONSE", "KF bootstrap did not return an onboarding session id.")
 
-        raw_watcher = start_payload.get("watcher")
-        if isinstance(raw_watcher, dict):
-            watcher_row = {
-                "eid": str(raw_watcher.get("eid", "") or ""),
-                "name": str(raw_watcher.get("name", "") or ""),
-                "watcherUrl": str(raw_watcher.get("watcher_url") or raw_watcher.get("url") or ""),
-                "oobi": vaulting.pick_oobi(raw_watcher),
-                "regionId": str(raw_watcher.get("region_id", "") or snapshot["bootstrap"]["regionId"]),
-                "regionName": str(raw_watcher.get("region_name", "") or snapshot["bootstrap"]["regionName"]),
-            }
+        boot_server_aid, start_payload, witness_rows, watcher_row = await _await_session_resources(
+            hby,
+            ephemeral_hab,
+            surfaces=surfaces,
+            record=record,
+            boot_server_aid=boot_server_aid,
+            start_payload=start_payload,
+            snapshot=snapshot,
+            option=option,
+        )
+        record.boot_server_aid = boot_server_aid
+        _save_kf_state(hby, record)
 
         if len(witness_rows) != option["witnessCount"]:
             raise vaulting.RuntimeFault(
@@ -1005,6 +1270,7 @@ async def _run_kf_onboarding(
             account_hab,
             witness_eids=[witness["eid"] for witness in witness_rows],
             toad=int(start_payload.get("toad", 0) or option["toad"]),
+            allow_reconfiguration=not bool(str(account_aid or "").strip()),
         )
 
         for witness in witness_rows:
@@ -1026,6 +1292,7 @@ async def _run_kf_onboarding(
             account_hab,
             witness_rows,
             toad=int(start_payload.get("toad", 0) or option["toad"]),
+            allow_reconfiguration=not bool(str(account_aid or "").strip()),
         )
 
         if watcher_row is not None and watcher_row["oobi"]:
@@ -1133,6 +1400,14 @@ async def _run_kf_onboarding(
             record.onboarding_session_id = str(start_payload.get("session_id", "") or "")
             record.onboarding_auth_alias = getattr(ephemeral_hab, "name", "") or record.onboarding_auth_alias
         _save_kf_state(hby, record)
+        try:
+            await vaulting.persist_and_reload()
+        except Exception as persistence_error:
+            raise vaulting.RuntimeFault(
+                "RUNTIME_ERROR",
+                "KF onboarding failed and its failure state could not be persisted: "
+                f"{persistence_error}",
+            ) from exc
         if isinstance(exc, vaulting.RuntimeFault):
             raise
         raise vaulting.RuntimeFault("RUNTIME_ERROR", f"KF onboarding failed: {exc}") from exc

@@ -144,6 +144,8 @@ const session = createSessionStore({
 
 let drawer: ReturnType<typeof createVaultDrawer> | null = null;
 let actions: AppActions;
+let vaultsLoaded = false;
+let initialVaultError: RuntimeError | null = null;
 
 function currentState(): AppSessionState {
     return assumeType<AppSessionState>(session.snapshot());
@@ -210,7 +212,7 @@ function showCreateVaultDialog(): void {
                 ${floatingInputHtml({ label: "Name", name: "name" })}
                 ${floatingInputHtml({ label: "Passcode", name: "passcode", password: true })}
                 <p class="muted">
-                    Passcode support is limited to vault reopen in this slice. Browser 2-factor authentication remains deferred.
+                    Use this passcode to open the vault.
                 </p>
                 <p class="status-line" data-create-vault-status></p>
             </form>
@@ -282,8 +284,8 @@ function initDrawer(vaults: VaultRecord[]): void {
     drawer = createVaultDrawer({
         vaults,
         onVaultClick(vault: VaultRecord) {
+            drawer?.close();
             if (isUnlocked(vault.id)) {
-                drawer?.close();
                 navigate(currentState().lastCoreRoutes[vault.id] || identifiersHref(vault.id));
                 return;
             }
@@ -304,6 +306,8 @@ actions = {
         const decorated = decorateVaults(vaults, unlockedVaultId, vaultSummary);
         session.patch({ vaults: decorated });
         drawer?.refresh(decorated);
+        vaultsLoaded = true;
+        initialVaultError = null;
         return decorated;
     },
 
@@ -428,11 +432,19 @@ actions = {
         if (!drawer) {
             return;
         }
-        if (document.body.contains(drawer.el)) {
+        if (drawer.isOpen) {
             drawer.close();
         } else {
-            await actions.refreshVaults(currentState().unlockedVaultId, currentState().vaultSummary);
             drawer.open();
+            try {
+                await actions.refreshVaults(currentState().unlockedVaultId, currentState().vaultSummary);
+            } catch (error) {
+                postLog("vault_refresh_failed", {
+                    level: "warning",
+                    code: errorCode(error),
+                    message: errorMessage(error),
+                });
+            }
         }
     },
 };
@@ -478,6 +490,19 @@ async function render(): Promise<void> {
     const vault = route.requiresVault ? findVault(route.params.vaultId) : null;
 
     if (route.name !== "home" && route.requiresVault && !vault) {
+        if (!vaultsLoaded) {
+            renderShell(root, {
+                route: { ...route, shellMode: "home", navMode: "none" },
+                page: initialVaultError ? renderErrorPage(initialVaultError) : {
+                    title: "Loading Vault",
+                    html: '<section class="placeholder-card"><p class="muted" role="status" aria-live="polite">Loading vault...</p></section>',
+                },
+                state,
+                vault: null,
+                actions,
+            });
+            return;
+        }
         renderNotFoundRoute({ root, route, state, vault: null, actions });
         return;
     }
@@ -576,11 +601,11 @@ window.addEventListener("beforeunload", () => {
 
 async function bootstrap(): Promise<void> {
     installGlobalHandlers();
+    initDrawer(currentState().vaults);
     await render();
 
     try {
         await actions.refreshVaults();
-        initDrawer(currentState().vaults);
         await render();
     } catch (error) {
         postLog("initial_vault_refresh_failed", {
@@ -588,6 +613,8 @@ async function bootstrap(): Promise<void> {
             code: errorCode(error),
             message: errorMessage(error),
         });
+        initialVaultError = { message: errorMessage(error) };
+        await render();
     }
 }
 

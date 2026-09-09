@@ -165,7 +165,7 @@ export function renderWatcherOverviewPage({
                     <div>
                         <h1>Watchers</h1>
                         <p>
-                            Hosted watcher rows are boot-backed account data. Manual status refresh stays explicit in this first Fortweb slice.
+                            View your account's hosted watchers and refresh their status.
                         </p>
                     </div>
                     <div class="page-header__actions page-header__actions--stacked">

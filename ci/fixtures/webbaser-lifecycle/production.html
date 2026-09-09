@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>FortWeb WebBaser v2 WebBaser production bridge</title>
+</head>
+<body>
+    <h1>FortWeb WebBaser v2 WebBaser production bridge</h1>
+    <pre id="status">booting</pre>
+    <script type="module">
+        const nativeMessages = [];
+        window.webkit = {
+            messageHandlers: {
+                bridge: {
+                    postMessage(payload) {
+                        nativeMessages.push(payload);
+                        if (typeof window.captureRuntimeNativeMessage === "function") {
+                            void window.captureRuntimeNativeMessage(payload);
+                        }
+                    },
+                },
+            },
+        };
+
+        const { createRuntimeBridge } = await import("/fortweb/app/runtime/bridge.js");
+        const workerUrl = new URL("/fortweb/app/runtime/wallet-worker.py", window.location.href);
+        const query = new URLSearchParams(window.location.search);
+        const configUrl = new URL(
+            query.has("preloadFailure")
+                ? "/fortweb/pyscript-preload-failure.toml"
+                : "/fortweb/pyscript-ci.toml",
+            window.location.href,
+        );
+        const runtimeOriginContract = {
+            schema: "fortweb.runtime-origin.v1",
+            version: query.has("invalidRuntimeContract") ? 2 : 1,
+            platform: "browser-dev",
+            mode: "browser-dev",
+            documentOrigin: window.location.origin,
+            appBaseUrl: window.location.origin,
+            entryUrl: window.location.href,
+            workerUrl: workerUrl.href,
+            configUrl: configUrl.href,
+            storage: {
+                storageNamespace: "fortweb-webbaser-production",
+                indexedDbRequired: true,
+                originPartition: window.location.origin,
+            },
+            capabilities: {
+                customScheme: false,
+                httpsLikeAssetOrigin: true,
+                implicitBlobOriginSafe: true,
+                networkAllowed: false,
+                bundledAssetsOnly: true,
+            },
+        };
+
+        const bridge = createRuntimeBridge({
+            workerUrl,
+            configUrl,
+            runtimeOriginContract,
+        });
+
+        window.webbaserProductionHarness = {
+            request(method, params = {}, timeoutMs) {
+                return bridge.request(method, params, timeoutMs);
+            },
+            destroy() {
+                bridge.destroy();
+            },
+            diagnostics() {
+                return nativeMessages.slice();
+            },
+        };
+        window.webbaserProductionHarnessReady = true;
+        document.querySelector("#status").textContent = "ready";
+    </script>
+</body>
+</html>

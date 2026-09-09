@@ -15,13 +15,13 @@ function normalizeRelativePath(filePath) {
     return filePath.split(path.sep).join('/');
 }
 
-export async function loadRuntimeOutputPaths(projectDir = DEFAULT_PROJECT_DIR) {
+export async function loadRuntimeOutputPaths(projectDir = DEFAULT_PROJECT_DIR, outputDirOverride = '') {
     const tsconfigPath = path.join(projectDir, 'tsconfig.build.json');
     const tsconfig = JSON.parse(await readFile(tsconfigPath, 'utf8'));
     const includes = Array.isArray(tsconfig.include) ? tsconfig.include : [];
     const rawOutDir = tsconfig.compilerOptions?.outDir;
     const rawRootDir = tsconfig.compilerOptions?.rootDir;
-    const outDir = typeof rawOutDir === 'string' && rawOutDir.length > 0 ? rawOutDir : '';
+    const outDir = outputDirOverride || (typeof rawOutDir === 'string' && rawOutDir.length > 0 ? rawOutDir : '');
     const rootDir = typeof rawRootDir === 'string' && rawRootDir.length > 0 ? rawRootDir : '';
 
     return includes
@@ -161,13 +161,24 @@ export function createFailureMessage(changedOutputs, missingOutputs = []) {
 }
 
 export async function main(projectDir = DEFAULT_PROJECT_DIR) {
-    const runtimeOutputs = await loadRuntimeOutputPaths(projectDir);
-    await runCommand('npm', ['run', 'build:runtime'], projectDir);
+    const configuredRuntime = process.env.FORTWEB_RUNTIME_DIR ?? '';
+    const runtimeOutput = configuredRuntime
+        ? normalizeRelativePath(path.relative(projectDir, path.resolve(projectDir, configuredRuntime)))
+        : '';
+    if (runtimeOutput.startsWith('../') || path.isAbsolute(runtimeOutput)) {
+        throw new Error('FORTWEB_RUNTIME_DIR must remain inside the repository.');
+    }
+    const runtimeOutputs = await loadRuntimeOutputPaths(projectDir, runtimeOutput);
+    const buildArguments = ['run', 'build:runtime'];
+    if (runtimeOutput) {
+        buildArguments.push('--', '--out-dir', runtimeOutput);
+    }
+    await runCommand('npm', buildArguments, projectDir);
 
     const firstSnapshot = await captureSnapshot(projectDir, runtimeOutputs);
     const missingOutputs = collectMissingOutputs(firstSnapshot);
 
-    await runCommand('npm', ['run', 'build:runtime'], projectDir);
+    await runCommand('npm', buildArguments, projectDir);
 
     const secondSnapshot = await captureSnapshot(projectDir, runtimeOutputs);
     const changedOutputs = diffSnapshots(firstSnapshot, secondSnapshot);

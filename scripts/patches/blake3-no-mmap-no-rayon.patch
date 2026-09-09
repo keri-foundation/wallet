@@ -1,0 +1,191 @@
+From 5f67bf0566a43b0a6ee8d4785a1503a5ec997f3b Mon Sep 17 00:00:00 2001
+From: Evan Asakawa <evanja57@gmail.com>
+Date: Thu, 22 Jan 2026 16:35:00 -0800
+Subject: [PATCH] Disable mmap and rayon for WASM/Pyodide compatibility
+
+Pyodide does not support threading (pthreads), so rayon cannot be used.
+mmap is also not available in browser environments.
+
+Changes:
+- Remove rayon and mmap features from blake3 dependency
+- Remove rayon crate dependency
+- Simplify ThreadingMode to only support single-threaded operation
+- Remove update_mmap function (mmap not available in browsers)
+---
+ Cargo.toml |  5 ++-
+ src/lib.rs | 96 ++++--------------------------------------------------
+ 2 files changed, 9 insertions(+), 92 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 9216637..bf9c670 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -21,7 +21,6 @@ crate-type = ["cdylib"]
+ neon = ["blake3/neon"]
+ 
+ [dependencies]
+-blake3 = { version = "1.5.5", features = ["mmap", "rayon"] }
++blake3 = { version = "1.5.5" }
+ hex = "0.4.3"
+ pyo3 = { version = "0.26.0", features = ["extension-module"] }
+-rayon = "1.11.0"
+diff --git a/src/lib.rs b/src/lib.rs
+index 61b1c91..1b23e64 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -4,7 +4,6 @@ use pyo3::buffer::PyBuffer;
+ use pyo3::exceptions::{PyBufferError, PyOverflowError, PyValueError};
+ use pyo3::prelude::*;
+ use pyo3::types::{PyAny, PyBytes, PyString};
+-use std::path::PathBuf;
+ use std::sync::Mutex;
+ 
+ // This is the same as HASHLIB_GIL_MINSIZE in CPython.
+@@ -138,33 +137,8 @@ unsafe fn bytes_from_pybuffer<T: pyo3::buffer::Element>(pybuffer: &PyBuffer<T>)
+     }
+ }
+ 
+-fn new_thread_pool(max_threads: usize) -> rayon::ThreadPool {
+-    rayon::ThreadPoolBuilder::new()
+-        .num_threads(max_threads)
+-        .build()
+-        .unwrap()
+-}
+-
+ enum ThreadingMode {
+     Single,
+-    Auto,
+-    Pool {
+-        pool: rayon::ThreadPool,
+-        max_threads: usize,
+-    },
+-}
+-
+-impl Clone for ThreadingMode {
+-    fn clone(&self) -> Self {
+-        match self {
+-            ThreadingMode::Single => ThreadingMode::Single,
+-            ThreadingMode::Auto => ThreadingMode::Auto,
+-            ThreadingMode::Pool { max_threads, .. } => ThreadingMode::Pool {
+-                max_threads: *max_threads,
+-                pool: new_thread_pool(*max_threads),
+-            },
+-        }
+-    }
+ }
+ 
+ /// An incremental BLAKE3 hasher, which can accept any number of writes.
+@@ -276,6 +250,7 @@ impl Blake3Class {
+         usedforsecurity: bool,
+     ) -> PyResult<Blake3Class> {
+         let _ = usedforsecurity; // currently ignored
++        let _ = max_threads; // threading is not supported in WASM/Pyodide
+ 
+         let mut rust_hasher = match (key, derive_key_context) {
+             // The default, unkeyed hash function.
+@@ -306,15 +281,7 @@ impl Blake3Class {
+             }
+         };
+ 
+-        let threading_mode = match max_threads {
+-            1 => ThreadingMode::Single,
+-            Self::AUTO => ThreadingMode::Auto,
+-            n if n > 1 => ThreadingMode::Pool {
+-                max_threads: n as usize,
+-                pool: new_thread_pool(n as usize),
+-            },
+-            _ => return Err(PyValueError::new_err("not a valid number of threads")),
+-        };
++        let threading_mode = ThreadingMode::Single;
+ 
+         if let Some(data_obj) = data {
+             // XXX: Get a &[u8] slice of the data bytes. The safety situation
+@@ -324,16 +291,8 @@ impl Blake3Class {
+ 
+             // Since rust_hasher isn't yet shared, we don't need to access it
+             // through the Mutex here like we do in update() below.
+-            let mut update_closure = || match &threading_mode {
+-                ThreadingMode::Single => {
+-                    rust_hasher.update(data_slice);
+-                }
+-                ThreadingMode::Auto => {
+-                    rust_hasher.update_rayon(data_slice);
+-                }
+-                ThreadingMode::Pool { pool, .. } => pool.install(|| {
+-                    rust_hasher.update_rayon(data_slice);
+-                }),
++            let mut update_closure = || {
++                rust_hasher.update(data_slice);
+             };
+ 
+             if data_slice.len() >= GIL_MINSIZE {
+@@ -371,16 +330,8 @@ impl Blake3Class {
+         let data_buf = BytesPyBuffer::get(data)?;
+         let data_slice: &[u8] = unsafe { data_buf.as_bytes()? };
+ 
+-        let update_closure = || match &self_.threading_mode {
+-            ThreadingMode::Single => {
+-                self_.rust_hasher.lock().unwrap().update(data_slice);
+-            }
+-            ThreadingMode::Auto => {
+-                self_.rust_hasher.lock().unwrap().update_rayon(data_slice);
+-            }
+-            ThreadingMode::Pool { pool, .. } => pool.install(|| {
+-                self_.rust_hasher.lock().unwrap().update_rayon(data_slice);
+-            }),
++        let update_closure = || {
++            self_.rust_hasher.lock().unwrap().update(data_slice);
+         };
+ 
+         if data_slice.len() >= GIL_MINSIZE {
+@@ -396,39 +347,6 @@ impl Blake3Class {
+         Ok(this)
+     }
+ 
+-    /// Read a file using memory mapping and add its bytes to the hasher. You can call this any
+-    /// number of times.
+-    ///
+-    /// Arguments:
+-    /// - `path` (required): The filepath to read.
+-    #[pyo3(signature=(path))]
+-    fn update_mmap<'py>(
+-        this: Bound<'py, Self>,
+-        py: Python,
+-        path: PathBuf,
+-    ) -> PyResult<Bound<'py, Self>> {
+-        let self_ = this.get();
+-
+-        py.detach(|| -> PyResult<()> {
+-            match &self_.threading_mode {
+-                ThreadingMode::Single => {
+-                    self_.rust_hasher.lock().unwrap().update_mmap(&path)?;
+-                }
+-                ThreadingMode::Auto => {
+-                    self_.rust_hasher.lock().unwrap().update_mmap_rayon(&path)?;
+-                }
+-                ThreadingMode::Pool { pool, .. } => {
+-                    pool.install(|| -> PyResult<()> {
+-                        self_.rust_hasher.lock().unwrap().update_mmap_rayon(&path)?;
+-                        Ok(())
+-                    })?;
+-                }
+-            }
+-            Ok(())
+-        })?;
+-        Ok(this)
+-    }
+-
+     /// Return a copy (“clone”) of the hasher. This can be used to
+     /// efficiently compute the digests of data sharing a common initial
+     /// substring.
+@@ -436,7 +354,7 @@ impl Blake3Class {
+     fn copy(&self) -> Blake3Class {
+         Blake3Class {
+             rust_hasher: Mutex::new(self.rust_hasher.lock().unwrap().clone()),
+-            threading_mode: self.threading_mode.clone(),
++            threading_mode: ThreadingMode::Single,
+         }
+     }
+ 
+-- 
+2.52.0
